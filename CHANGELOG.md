@@ -1,5 +1,11 @@
 # @operatornest/convex-zoho-cpaas
 
+## 0.2.0
+
+### Minor Changes
+
+- bf6c404: The repository was re-created with a clean history; package code and API are unchanged from 0.1.1. The maintainer provider check is now `pnpm e2e`.
+
 ## 0.1.1
 
 ### Patch Changes

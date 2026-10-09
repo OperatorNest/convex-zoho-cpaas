@@ -1,6 +1,6 @@
 {
   "name": "@operatornest/convex-zoho-cpaas",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Zoho CPaaS for Convex: transactional email, SMS and WhatsApp with durable sends and verified webhooks.",
   "keywords": [
     "component",
