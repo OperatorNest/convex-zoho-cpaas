@@ -80,32 +80,32 @@ const emailTemplate = {
   mergeInfo: v.optional(v.record(v.string(), v.string())),
 };
 
-export const emailSendArgs = v.object({
+export const emailSendArgsValidator = v.object({
   ...emailCommon,
   ...emailBody,
   to: v.array(emailAddressValidator),
 });
 
-export const emailTemplateArgs = v.object({
+export const emailTemplateArgsValidator = v.object({
   ...emailCommon,
   ...emailTemplate,
   to: v.array(emailAddressValidator),
 });
 
-export const emailBatchArgs = v.object({
+export const emailBatchArgsValidator = v.object({
   ...emailCommon,
   ...emailBody,
   mergeInfo: v.optional(v.record(v.string(), v.string())),
   to: v.array(emailRecipientValidator),
 });
 
-export const emailTemplateBatchArgs = v.object({
+export const emailTemplateBatchArgsValidator = v.object({
   ...emailCommon,
   ...emailTemplate,
   to: v.array(emailRecipientValidator),
 });
 
-export const smsTemplateArgs = v.object({
+export const smsTemplateArgsValidator = v.object({
   senderKey: v.string(),
   to: v.string(),
   templateKey: v.optional(v.string()),
@@ -116,7 +116,7 @@ export const smsTemplateArgs = v.object({
   testMode: v.optional(v.boolean()),
 });
 
-export const whatsappTemplateArgs = v.object({
+export const whatsappTemplateArgsValidator = v.object({
   from: v.string(),
   to: v.string(),
   zohoAgentId: v.optional(v.string()),

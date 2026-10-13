@@ -16,12 +16,14 @@ import {
   buildWhatsappPayload,
   normalizeToken,
   regionBaseUrl,
+  regionFromBaseUrl,
   isIndiaBaseUrl,
   validateUploadFile,
 } from "./provider.js";
 import { canTransitionStatus } from "./status.js";
 import { parseWebhookBody, verifyWebhookSignature } from "./webhook.js";
 
+// Documented: the field nesting follows the published email webhook payload; no field is captured from a live delivery.
 const webhookPayload = {
   event_name: ["hardbounce"],
   event_message: [
@@ -49,19 +51,29 @@ const webhookPayload = {
           object: "bounce",
         },
       ],
+      request_id: "2d6f.14350939.i1.demo",
     },
   ],
-  request_id: "2d6f.14350939.i1.demo",
   mailagent_key: "123456abcd78",
   webhook_request_id: "wh-demo-0001",
 };
 const json = JSON.stringify(webhookPayload);
 const header =
-  "ts=1790000000000;s=a6tBYILSTq7n2%2BkwFHltWX7cz5Tq%2BE9TUm7aNP4IqF0%3D;s-algorithm=HmacSHA256";
+  "ts=1790000000000;s=iSff8JmPkvBYS7pbk%2BeFwH44KPlzSe3eCHz9YpPiW5E%3D;s-algorithm=HmacSHA256";
 const body = `data=${encodeURIComponent(json)}`;
 
+function parseEventTime(message: Record<string, unknown>): number | undefined {
+  return parseWebhookBody(
+    JSON.stringify({
+      webhook_request_id: "event-time",
+      event_name: ["open"],
+      event_message: [message],
+    }),
+  )?.events.at(0)?.occurredAt;
+}
+
 describe("webhook trust boundary", () => {
-  test("verifies the documented worked HMAC vector and extracts array-shaped email events", async () => {
+  test("verifies the body HMAC and reads the request ID nested in the documented event message", async () => {
     const signed = await verifyWebhookSignature(
       body,
       header,
@@ -82,9 +94,55 @@ describe("webhook trust boundary", () => {
           zohoRequestId: "2d6f.14350939.i1.demo",
           zohoMessageId: "ref-demo-0001",
           clientReference: "order-12345",
+          occurredAt: Date.parse("2026-10-04T10:00:05Z"),
         },
       ],
     });
+  });
+
+  test("falls back to a top-level request ID when the event message names none", () => {
+    const event = structuredClone(webhookPayload);
+    const first = atOrThrow(event.event_message, 0);
+    const { request_id: requestId, ...withoutRequestId } = first;
+    const parsed = parseWebhookBody(
+      JSON.stringify({ ...event, event_message: [withoutRequestId], request_id: requestId }),
+    );
+    expect(parsed?.events.at(0)?.zohoRequestId).toBe("2d6f.14350939.i1.demo");
+  });
+
+  test("reads the event time from object- or array-shaped event data and details", () => {
+    const time = "2026-10-04T10:00:05Z";
+    for (const eventData of [
+      { details: { time } },
+      [{ details: { time } }],
+      { details: [{ time }] },
+    ])
+      expect(parseEventTime({ email_info: {}, event_data: eventData })).toBe(Date.parse(time));
+  });
+
+  test("reads epoch numbers below 1e12 as seconds and larger numbers as milliseconds", () => {
+    for (const [time, expected] of [
+      [1_790_000_000, 1_790_000_000_000],
+      [1_790_000_000_123, 1_790_000_000_123],
+    ])
+      expect(parseEventTime({ email_info: {}, event_data: [{ details: [{ time }] }] })).toBe(
+        expected,
+      );
+  });
+
+  test("falls back to the processed time and ignores undocumented time fields", () => {
+    expect(parseEventTime({ email_info: { processed_time: "2026-10-04T10:00:00Z" } })).toBe(
+      Date.parse("2026-10-04T10:00:00Z"),
+    );
+    expect(
+      parseEventTime({ email_info: {}, occurred_at: Date.now(), timestamp: Date.now() }),
+    ).toBeUndefined();
+    expect(
+      parseEventTime({ email_info: {}, event_data: [{ details: [{ time: "not a time" }] }] }),
+    ).toBeUndefined();
+    expect(
+      parseEventTime({ email_info: {}, event_data: [{ details: [{ time: -1 }] }] }),
+    ).toBeUndefined();
   });
 
   test("rejects tampering, missing secrets, stale and future timestamps", async () => {
@@ -499,6 +557,16 @@ describe("provider request shapes and limits", () => {
     expect(isIndiaBaseUrl("https://cpaas.zoho.in/v1.1")).toBe(true);
     expect(isIndiaBaseUrl("https://cpaas.zoho.com/v1.1")).toBe(false);
   });
+
+  test("derives the region from the base URL host", () => {
+    expect(regionFromBaseUrl("https://cpaas.zoho.in/v1.1")).toBe("in");
+    expect(regionFromBaseUrl("https://api.zeptomail.eu/v1.1")).toBe("eu");
+    expect(regionFromBaseUrl("https://api.zeptomail.com.au/v1.1")).toBe("au");
+    expect(regionFromBaseUrl("https://api.zeptomail.com.cn/v1.1")).toBe("cn");
+    expect(regionFromBaseUrl("https://cpaas.zoho.jp/v1.1")).toBe("jp");
+    expect(regionFromBaseUrl("https://cpaas.zoho.com/v1.1")).toBe("us");
+    expect(regionFromBaseUrl("https://zoho-proxy.example.test/v1.1")).toBe("us");
+  });
 });
 
 describe("errors and message status", () => {
@@ -539,15 +607,15 @@ describe("errors and message status", () => {
         .accountState,
     ).toBe(true);
     expect(
-      classifyProviderError(403, { error: { details: [{ code: "SMI_115" }] } }, "90000").code,
-    ).toBe("ZOHO_CPAAS_RETRY_AFTER_TOO_LONG");
+      classifyProviderError(403, { error: { details: [{ code: "SMI_115" }] } }, "90000"),
+    ).toMatchObject({ code: "ZOHO_CPAAS_PROVIDER_ERROR", retryable: false });
     expect(
       classifyProviderError(
         403,
         { error: { details: [{ code: "SMI_115" }] } },
         "999999999999999999999999999999999",
-      ).code,
-    ).toBe("ZOHO_CPAAS_RETRY_AFTER_TOO_LONG");
+      ),
+    ).toMatchObject({ code: "ZOHO_CPAAS_PROVIDER_ERROR", retryable: false });
     expect(parseRetryAfter("Thu, 01 Jan 1970 00:00:05 GMT", 0)).toBe(5000);
     expect(parseRetryAfter("172800")).toBe(172800000);
     expect(parseRetryAfter("999999999999999999999999999999999")).toBeUndefined();
@@ -592,7 +660,7 @@ describe("errors and message status", () => {
         { error: { code: "TM_3601", details: [{ code: "SMI_115" }] } },
         "172800",
       ),
-    ).toMatchObject({ retryable: false, code: "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG" });
+    ).toMatchObject({ retryable: false, code: "ZOHO_CPAAS_PROVIDER_ERROR" });
     expect(retryBackoffMs(5)).toBe(16000);
   });
 
@@ -606,13 +674,20 @@ describe("errors and message status", () => {
     expect(canTransitionStatus("queued", "sending", "email")).toBe(true);
     expect(canTransitionStatus("accepted", "bounced", "email")).toBe(true);
     expect(canTransitionStatus("accepted", "delivered", "email")).toBe(false);
-    expect(canTransitionStatus("delivered", "failed", "whatsapp")).toBe(true);
+    expect(canTransitionStatus("delivered", "failed", "whatsapp")).toBe(false);
     expect(canTransitionStatus("read", "accepted", "whatsapp")).toBe(false);
     expect(canTransitionStatus("read", "delivered", "whatsapp")).toBe(false);
     expect(canTransitionStatus("read", "failed", "whatsapp")).toBe(false);
     expect(canTransitionStatus("read", "read", "whatsapp")).toBe(false);
     expect(canTransitionStatus("complained", "accepted", "email")).toBe(false);
     expect(canTransitionStatus("sending", "canceled", "email")).toBe(false);
+  });
+
+  test("allows failed only from queued, sending, accepted or unknown", () => {
+    for (const current of ["queued", "sending", "accepted", "unknown"] as const)
+      expect(canTransitionStatus(current, "failed", "whatsapp")).toBe(true);
+    for (const current of ["delivered", "read", "bounced", "canceled"] as const)
+      expect(canTransitionStatus(current, "failed", "whatsapp")).toBe(false);
   });
 });
 
@@ -635,7 +710,9 @@ test("every documented provider error code survives classification verbatim", ()
 test("the exported error guard rejects malformed provider metadata and missing messages", () => {
   const code = "ZOHO_CPAAS_PROVIDER_ERROR";
   expect(
-    isZohoCpaasError(zohoCpaasError(code, { providerStatus: 429, providerCode: "TM_3601" })),
+    isZohoCpaasError(
+      zohoCpaasError(code, { retryable: true, providerStatus: 429, providerCode: "TM_3601" }),
+    ),
   ).toBe(true);
   for (const data of [
     null,

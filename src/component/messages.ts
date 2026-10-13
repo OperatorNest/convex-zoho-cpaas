@@ -6,9 +6,8 @@ import { zohoCpaasError } from "../shared/errors.js";
 import { boundedPage } from "../shared/bounds.js";
 import { channelValidator } from "../shared/validators.js";
 import type { Id } from "./_generated/dataModel.js";
-import { env, mutation, query, type QueryCtx } from "./_generated/server.js";
+import { mutation, query, type QueryCtx } from "./_generated/server.js";
 import schema, { statusValidator } from "./schema.js";
-import { readConfig, resolveTestMode, tokenFor } from "./config.js";
 import { pool } from "./pool.js";
 
 function messageIdOrThrow(ctx: Pick<QueryCtx, "db">, value: string): Id<"messages"> {
@@ -120,14 +119,4 @@ export const cancel = mutation({
     }
     return true;
   },
-});
-
-export const getConfig = query({
-  args: {},
-  returns: v.object({ configured: v.boolean(), testMode: v.boolean(), region: v.string() }),
-  handler: () => ({
-    configured: !!tokenFor("email"),
-    testMode: resolveTestMode(undefined),
-    region: readConfig(env).region,
-  }),
 });

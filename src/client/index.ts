@@ -18,12 +18,12 @@ import type { Channel, MessageStatus } from "../shared/status.js";
 import type { NormalizedWebhookEvent } from "../shared/webhook.js";
 import { maxWebhookBodyBytes } from "../shared/webhook.js";
 import {
-  emailBatchArgs,
-  emailSendArgs,
-  emailTemplateArgs,
-  emailTemplateBatchArgs,
-  smsTemplateArgs,
-  whatsappTemplateArgs,
+  emailBatchArgsValidator,
+  emailSendArgsValidator,
+  emailTemplateArgsValidator,
+  emailTemplateBatchArgsValidator,
+  smsTemplateArgsValidator,
+  whatsappTemplateArgsValidator,
 } from "../shared/validators.js";
 
 export type { Channel, MessageStatus } from "../shared/status.js";
@@ -47,33 +47,38 @@ export type { NormalizedWebhookEvent, WebhookEventType } from "../shared/webhook
 export { normalizedWebhookEventValidator } from "../shared/webhook.js";
 
 /** Arguments for an inline transactional email. */
-export type EmailSend = Omit<Infer<typeof emailSendArgs>, "from" | "testMode"> & {
+export type EmailSend = Omit<Infer<typeof emailSendArgsValidator>, "from" | "testMode"> & {
   from?: EmailAddress;
 };
 /** Arguments for an email using a pre-created Zoho template. */
-export type EmailTemplateSend = Omit<Infer<typeof emailTemplateArgs>, "from" | "testMode"> & {
+export type EmailTemplateSend = Omit<
+  Infer<typeof emailTemplateArgsValidator>,
+  "from" | "testMode"
+> & {
   from?: EmailAddress;
 };
 /** Arguments for one email batch with recipient merge values. */
-export type EmailBatchSend = Omit<Infer<typeof emailBatchArgs>, "from" | "testMode"> & {
+export type EmailBatchSend = Omit<Infer<typeof emailBatchArgsValidator>, "from" | "testMode"> & {
   from?: EmailAddress;
 };
 /** Arguments for one template email batch with recipient merge values. */
 export type EmailTemplateBatchSend = Omit<
-  Infer<typeof emailTemplateBatchArgs>,
+  Infer<typeof emailTemplateBatchArgsValidator>,
   "from" | "testMode"
 > & { from?: EmailAddress };
 /** Arguments for an experimental India DLT template SMS. */
-export type SmsTemplateSend = Omit<Infer<typeof smsTemplateArgs>, "testMode">;
+export type SmsTemplateSend = Omit<Infer<typeof smsTemplateArgsValidator>, "testMode">;
 /** Arguments for an experimental pre-approved WhatsApp template message. */
-export type WhatsappTemplateSend = Omit<Infer<typeof whatsappTemplateArgs>, "testMode">;
+export type WhatsappTemplateSend = Omit<Infer<typeof whatsappTemplateArgsValidator>, "testMode">;
 
-/** The Convex query capability used to read stored component rows. */
+// shared-block:begin
+/** Runs component queries; app queries, mutations and actions provide it. */
 export type QueryContext = Pick<GenericQueryCtx<GenericDataModel>, "runQuery">;
-/** The Convex mutation capability used to enqueue or cancel outbound messages. */
+/** Runs component mutations; app mutations and actions provide it. */
 export type MutationContext = Pick<GenericMutationCtx<GenericDataModel>, "runMutation">;
-/** The Convex action capability used to upload a file cache. */
+/** Runs component actions; app actions provide it. */
 export type ActionContext = Pick<GenericActionCtx<GenericDataModel>, "runAction">;
+// shared-block:end
 /** A verified Zoho event and its message correlation passed to the internal callback. */
 export type ZohoCpaasEventArgs = {
   event: NormalizedWebhookEvent;
@@ -98,6 +103,7 @@ export class ZohoCpaas {
     private readonly options: ZohoCpaasOptions = {},
   ) {}
 
+  /** Sends ZeptoMail emails and template emails, singly or in batches. */
   readonly email = {
     /** Enqueue an inline transactional email for each requested recipient. */
     send: (ctx: MutationContext, args: EmailSend) =>
@@ -182,6 +188,7 @@ export class ZohoCpaas {
       }),
   };
 
+  /** Uploads ZeptoMail file attachments. */
   readonly files = {
     /** Upload binary email media and return its Zoho file-cache key. */
     upload: (ctx: ActionContext, args: { name: string; mimeType: string; content: ArrayBuffer }) =>
@@ -193,6 +200,7 @@ export class ZohoCpaas {
       }),
   };
 
+  /** Sends WhatsApp template messages. */
   readonly whatsapp = {
     /** Enqueue an experimental pre-approved WhatsApp template message. */
     sendTemplate: (ctx: MutationContext, args: WhatsappTemplateSend) =>
@@ -209,6 +217,7 @@ export class ZohoCpaas {
       }),
   };
 
+  /** Sends SMS template messages. */
   readonly sms = {
     /** Enqueue an experimental India DLT template SMS. */
     sendTemplate: (ctx: MutationContext, args: SmsTemplateSend) =>
@@ -224,12 +233,17 @@ export class ZohoCpaas {
       }),
   };
 
-  readonly messages = {
-    /** Read email configuration, simulation and region state. */
-    getConfig: async (ctx: QueryContext, _args: Record<string, never>) => {
-      const status = await ctx.runQuery(this.component.messages.getConfig, {});
+  /** Reads the component configuration with secrets omitted. */
+  readonly config = {
+    /** Read whether email credentials are configured, whether test mode is active, and the provider region. */
+    get: async (ctx: QueryContext) => {
+      const status = await ctx.runQuery(this.component.config.get, {});
       return { ...status, testMode: this.options.testMode === true || status.testMode };
     },
+  };
+
+  /** Reads, lists and cancels sent messages and lists their delivery events. */
+  readonly messages = {
     /** Read a stored message by its component message ID. */
     get: (ctx: QueryContext, args: { messageId: string }) =>
       ctx.runQuery(this.component.messages.get, { messageId: args.messageId }),
@@ -262,6 +276,7 @@ export class ZohoCpaas {
     cancel: (ctx: MutationContext, args: { messageId: string }) =>
       ctx.runMutation(this.component.messages.cancel, { messageId: args.messageId }),
   };
+  /** Lists and removes suppressed recipients. */
   readonly suppressions = {
     /** Read a bounded page of persistent suppressions for a channel. */
     list: (
@@ -287,7 +302,7 @@ export class ZohoCpaas {
   registerRoutes(http: HttpRouter, options: { path?: `/${string}` } = {}) {
     registerRoutes(http, this.component, {
       path: options.path,
-      ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
+      onEvent: this.options.onEvent,
     });
   }
 }

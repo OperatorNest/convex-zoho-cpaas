@@ -1,314 +1,137 @@
-import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHmac, randomBytes } from "node:crypto";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join, relative, sep } from "node:path";
-import { acquireLock } from "./with-local-lock.mjs";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { runSmoke, step } from "./smoke-harness.mjs";
 
-const cliEnv = { ...process.env, CONVEX_AGENT_MODE: "anonymous" };
-for (const name of [
-  "CONVEX_DEPLOYMENT",
-  "CONVEX_DEPLOY_KEY",
-  "CONVEX_SELF_HOSTED_URL",
-  "CONVEX_SELF_HOSTED_ADMIN_KEY",
-])
-  delete cliEnv[name];
+const WAIT_TIMEOUT_MS = 60_000;
+const WAIT_INTERVAL_MS = 1_000;
 
-const results = [];
-const failures = [];
-
-function isolateIfConfigured() {
-  if (!existsSync(".env.local")) return null;
-  const sourceRoot = process.cwd();
-  const base =
-    process.platform === "darwin" && existsSync("/private/tmp/claude-502")
-      ? "/private/tmp/claude-502"
-      : tmpdir();
-  mkdirSync(base, { recursive: true });
-  const dir = mkdtempSync(join(base, "zoho-cpaas-smoke-"));
-  try {
-    cpSync(sourceRoot, dir, {
-      recursive: true,
-      filter: (source) => {
-        const name = relative(sourceRoot, source).split(sep)[0];
-        if (name.startsWith(".env")) return false;
-        return ![".git", ".convex", ".cache", "node_modules", "coverage"].includes(name);
-      },
-    });
-    symlinkSync(join(sourceRoot, "node_modules"), join(dir, "node_modules"), "dir");
-    process.chdir(dir);
-    return { sourceRoot, dir };
-  } catch (error) {
-    rmSync(dir, { recursive: true, force: true });
-    throw error;
-  }
+function assertThat(condition, detail) {
+  if (!condition) throw new Error(detail ?? "assertion failed");
 }
 
-function convex(...args) {
-  return execFileSync("pnpm", ["exec", "convex", ...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    env: cliEnv,
-  });
-}
-
-function setEnv(name, value) {
-  const result = spawnSync("pnpm", ["exec", "convex", "env", "set", name], {
-    input: value,
-    encoding: "utf8",
-    stdio: ["pipe", "ignore", "pipe"],
-    env: cliEnv,
-  });
-  if (result.status !== 0) throw new Error(`Failed to set ${name} on the local deployment`);
-}
-
-function parseOut(out) {
-  try {
-    return JSON.parse(out.trim());
-  } catch {
-    throw new Error("Convex CLI returned non-JSON output");
-  }
-}
-
-function run(fn, args = {}) {
-  return parseOut(convex("run", fn, JSON.stringify(args)));
-}
-
-function runError(fn, args = {}) {
-  try {
-    convex("run", fn, JSON.stringify(args));
-  } catch (error) {
-    return `${error.stderr ?? ""}${error.stdout ?? ""}${error.message}`;
-  }
-  return null;
-}
-
-function check(name, ok, detail) {
-  results.push({ name, ok, detail });
-  if (!ok) failures.push(`${name}${detail ? `: ${detail}` : ""}`);
-}
-
-async function waitFor(fn, what, timeoutMs = 60_000) {
-  const deadline = Date.now() + timeoutMs;
+async function waitFor(read, what) {
+  const deadline = Date.now() + WAIT_TIMEOUT_MS;
   for (;;) {
-    const value = fn();
+    const value = await read();
     if (value) return value;
     if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await sleep(WAIT_INTERVAL_MS);
   }
 }
 
-function pushFunctions() {
-  try {
-    convex("dev", "--once");
-  } catch (error) {
-    console.log(
-      `convex dev --once failed (${String(error.message).split("\n")[0]}); retrying once`,
-    );
-    convex("dev", "--once");
-  }
-}
-
-function ensureLocalDeployment() {
-  if (!existsSync(".env.local")) convex("init");
-
-  const envFile = readFileSync(".env.local", "utf8");
-  const deployment = envFile.match(/^CONVEX_DEPLOYMENT=(.*)$/m)?.[1]?.trim();
-  const cloudUrl = envFile.match(/^CONVEX_URL=(.*)$/m)?.[1]?.trim();
-  if (deployment && !deployment.startsWith("anonymous:") && !deployment.startsWith("local:"))
-    throw new Error("Smoke requires an anonymous local deployment");
-  if (cloudUrl && !/^http:\/\/(127\.0\.0\.1|localhost):\d+\/?$/.test(cloudUrl))
-    throw new Error("Smoke requires a local Convex URL");
-}
-
-function startDev() {
-  const child = spawn("pnpm", ["exec", "convex", "dev"], {
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
-    env: cliEnv,
-  });
-  let log = "";
-  const ready = new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error(`convex dev not ready: ${Array.from(log).slice(-500).join("")}`)),
-      120_000,
-    );
-    const onData = (chunk) => {
-      log += chunk.toString();
-      if (/functions ready/i.test(log)) {
-        clearTimeout(timeout);
-        resolve();
-      }
-    };
-    child.stdout.on("data", onData);
-    child.stderr.on("data", onData);
-    child.on("exit", (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`convex dev exited (${code}): ${Array.from(log).slice(-500).join("")}`));
-    });
-  });
-  return { child, ready };
-}
-
-async function stopDev(dev) {
-  if (!dev?.child.pid) return;
-  const pid = dev.child.pid;
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    return;
-  }
-  await Promise.race([
-    new Promise((resolve) => dev.child.once("exit", resolve)),
-    new Promise((resolve) => setTimeout(resolve, 5_000)),
-  ]);
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {}
-}
-
-function siteUrl() {
-  const line = readFileSync(".env.local", "utf8")
-    .split("\n")
-    .find((l) => l.startsWith("CONVEX_SITE_URL="));
-  if (!line) throw new Error("CONVEX_SITE_URL missing from .env.local");
-  const url = line.slice("CONVEX_SITE_URL=".length).trim();
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error("CONVEX_SITE_URL is invalid");
-  }
-  if (
-    parsed.protocol !== "http:" ||
-    !["127.0.0.1", "localhost"].includes(parsed.hostname) ||
-    !parsed.port ||
-    parsed.username ||
-    parsed.password
-  )
-    throw new Error("Smoke requires a local HTTP site");
-  return url;
-}
-
-// Zoho signs URL-decoded JSON with HMAC-SHA256.
-function signature(json, secret) {
-  const s = createHmac("sha256", secret).update(json, "utf8").digest("base64");
-  return `ts=${Date.now()};s=${encodeURIComponent(s)};s-algorithm=HmacSHA256`;
-}
-
-async function post(base, json, sig) {
-  const response = await fetch(`${base}/zoho-cpaas/webhook`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", "producer-signature": sig },
-    body: `data=${encodeURIComponent(json)}`,
-  });
-  return response.status;
-}
-
-function receiptCount() {
-  const out = convex(
-    "data",
-    "--component",
-    "zohoCpaas",
-    "webhookReceipts",
-    "--format",
-    "jsonArray",
+function readSiteUrl(workspace) {
+  const config = JSON.parse(
+    readFileSync(join(workspace, ".convex/local/default/config.json"), "utf8"),
   );
-  return parseOut(out).length;
+  return `http://127.0.0.1:${config.ports.site}`;
 }
 
-const isolated = isolateIfConfigured();
-let release;
-let dev;
-try {
-  release = await acquireLock();
-  ensureLocalDeployment();
-  const base = siteUrl();
-  const secret = randomBytes(24).toString("hex");
-  console.log("Building the package and pushing functions to the local deployment...");
-  execFileSync("pnpm", ["build"], { stdio: "ignore", env: cliEnv });
-  pushFunctions();
-  dev = startDev();
-  await dev.ready;
+// Zoho signs the URL-decoded JSON body with HMAC-SHA256.
+function signBody(json, secret) {
+  const digest = createHmac("sha256", secret).update(json, "utf8").digest("base64");
+  return `ts=${Date.now()};s=${encodeURIComponent(digest)};s-algorithm=HmacSHA256`;
+}
 
-  setEnv("ZOHO_CPAAS_REGION", "in");
-  setEnv("ZOHO_CPAAS_TEST_MODE", "true");
-  setEnv("ZOHO_CPAAS_WEBHOOK_SECRET", secret);
-  await waitFor(() => {
+await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVariable }) => {
+  const siteUrl = readSiteUrl(workspace);
+  const secret = randomBytes(24).toString("hex");
+  const tag = `smoke${Date.now()}`;
+  const addressFor = (name) => `${tag}-${name}@example.test`;
+  const readMessage = (messageId) => runFunction("example:get", { messageId });
+  const waitForStatus = (messageId, status) =>
+    waitFor(async () => {
+      const message = await readMessage(messageId);
+      return message?.status === status ? message : null;
+    }, `${messageId} to reach ${status}`);
+  const countCallbacks = () => runFunction("example:webhookCallbackCount");
+  const listSuppressions = () =>
+    runFunction("example:listSuppressions", { paginationOpts: { numItems: 50, cursor: null } });
+  const readReceipts = async () =>
+    JSON.parse(
+      await runConvexCli([
+        "data",
+        "--component",
+        "zohoCpaas",
+        "webhookReceipts",
+        "--format",
+        "jsonArray",
+      ]),
+    );
+  const postWebhook = async (json, signature) => {
+    const response = await fetch(`${siteUrl}/zoho-cpaas/webhook`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "producer-signature": signature,
+      },
+      body: `data=${encodeURIComponent(json)}`,
+    });
+    return response.status;
+  };
+
+  await setEnvironmentVariable("ZOHO_CPAAS_REGION", "in");
+  await setEnvironmentVariable("ZOHO_CPAAS_TEST_MODE", "true");
+  await setEnvironmentVariable("ZOHO_CPAAS_WEBHOOK_SECRET", secret);
+  await waitFor(async () => {
     try {
-      const status = run("example:getConfig", {});
-      return status.testMode === true && status.region === "in";
+      const config = await runFunction("example:getConfig", {});
+      return config.testMode === true && config.region === "in";
     } catch {
       return false;
     }
   }, "component India and test-mode configuration to reload");
 
-  const fileCacheKey = run("example:upload", {
-    name: "smoke.txt",
-    mimeType: "text/plain",
-    content: { $bytes: "c21va2U=" },
+  await step("files.upload returns a simulated file-cache key", async () => {
+    const fileCacheKey = await runFunction("example:upload", {
+      name: "smoke.txt",
+      mimeType: "text/plain",
+      content: { $bytes: "c21va2U=" },
+    });
+    assertThat(
+      typeof fileCacheKey === "string" && fileCacheKey.startsWith("test-file-"),
+      String(fileCacheKey),
+    );
   });
-  check(
-    "files.upload returns a simulated file-cache key",
-    typeof fileCacheKey === "string" && fileCacheKey.startsWith("test-file-"),
-  );
 
-  const tag = `smoke${Date.now()}`;
-  const addr = (name) => `${tag}-${name}@example.test`;
-  const messageStatus = (id) => run("example:get", { messageId: id });
-  const waitStatus = (id, status) =>
-    waitFor(() => {
-      const m = messageStatus(id);
-      return m?.status === status ? m : null;
-    }, `${id} to reach ${status}`);
-
-  const [sentId] = run("example:sendEmail", {
-    to: addr("bounce"),
+  const emailRequest = {
+    to: addressFor("bounce"),
     subject: "Smoke",
     textbody: "Hello",
     idempotencyKey: `${tag}-key`,
+  };
+  const [sentId] = await runFunction("example:sendEmail", emailRequest);
+  let sent;
+  await step("email.send reaches accepted", async () => {
+    sent = await waitForStatus(sentId, "accepted");
   });
-  const sent = await waitStatus(sentId, "accepted");
-  check("email.send reaches accepted", sent.status === "accepted");
-  check("email.send tagged testMode", sent.testMode === true);
-  const replay = run("example:sendEmail", {
-    to: addr("bounce"),
-    subject: "Smoke",
-    textbody: "Hello",
-    idempotencyKey: `${tag}-key`,
+  await step("email.send tagged testMode", () => assertThat(sent?.testMode === true));
+  await step("idempotent replay returns same ids", async () => {
+    const replay = await runFunction("example:sendEmail", emailRequest);
+    assertThat(replay.length === 1 && replay[0] === sentId, JSON.stringify(replay));
   });
-  check("idempotent replay returns same ids", replay.length === 1 && replay[0] === sentId);
 
-  const batchRecipients = [addr("b1"), addr("b2"), addr("b3")];
-  const batchIds = run("example:sendTemplateBatch", {
-    recipients: batchRecipients,
+  const batchRequest = {
+    recipients: [addressFor("b1"), addressFor("b2"), addressFor("b3")],
     templateKey: "smoke-template",
     idempotencyKey: `${tag}-batch`,
-  });
-  check("sendTemplateBatch returns 3 rows", batchIds.length === 3 && new Set(batchIds).size === 3);
-  const batchReplay = run("example:sendTemplateBatch", {
-    recipients: batchRecipients,
-    templateKey: "smoke-template",
-    idempotencyKey: `${tag}-batch`,
-  });
-  check("batch idempotent replay returns same ids", batchReplay.join() === batchIds.join());
-  const batchRows = [];
-  for (const id of batchIds) batchRows.push(await waitStatus(id, "accepted"));
-  check(
-    "batch rows reach accepted in test mode",
-    batchRows.length === 3 &&
-      batchRows.every((row) => row.status === "accepted" && row.testMode === true),
+  };
+  const batchIds = await runFunction("example:sendTemplateBatch", batchRequest);
+  await step("sendTemplateBatch returns 3 rows", () =>
+    assertThat(batchIds.length === 3 && new Set(batchIds).size === 3),
   );
+  await step("batch idempotent replay returns same ids", async () => {
+    const replay = await runFunction("example:sendTemplateBatch", batchRequest);
+    assertThat(replay.join() === batchIds.join());
+  });
+  await step("batch rows reach accepted in test mode", async () => {
+    const rows = [];
+    for (const messageId of batchIds) rows.push(await waitForStatus(messageId, "accepted"));
+    assertThat(rows.length === 3 && rows.every((row) => row.testMode === true));
+  });
 
-  const events = (reqId, extra = {}) =>
+  const createBounceBody = (webhookRequestId, extra = {}) =>
     JSON.stringify({
       event_name: ["hardbounce"],
       event_message: [
@@ -316,7 +139,7 @@ try {
           email_info: {
             client_reference: sentId,
             subject: "Smoke",
-            to: [{ email_address: { address: addr("bounce") } }],
+            to: [{ email_address: { address: addressFor("bounce") } }],
             processed_time: new Date().toISOString(),
           },
           object: "email",
@@ -332,127 +155,158 @@ try {
               object: "bounce",
             },
           ],
+          request_id: sent?.zohoRequestId,
         },
       ],
-      request_id: sent.zohoRequestId,
-      ...(reqId ? { webhook_request_id: reqId } : {}),
+      ...(webhookRequestId === undefined ? {} : { webhook_request_id: webhookRequestId }),
       ...extra,
     });
-  const callbacksBefore = run("example:webhookCallbackCount");
-  const json = events(`${tag}-wh1`);
-  const status1 = await post(base, json, signature(json, secret));
-  check("signed hard-bounce webhook returns 200", status1 === 200, `status ${status1}`);
-  const bounced = messageStatus(sentId);
-  check("message status becomes bounced", bounced?.status === "bounced", bounced?.status);
-  const supps = run("example:listSuppressions", { paginationOpts: { numItems: 50, cursor: null } });
-  check(
-    "bounced address added to suppressions",
-    supps.some((s) => s.address === addr("bounce") && s.reason === "hardbounce"),
+  const callbacksBefore = await countCallbacks();
+  const bounceBody = createBounceBody(`${tag}-wh1`);
+  await step("signed hard-bounce webhook returns 200", async () => {
+    const status = await postWebhook(bounceBody, signBody(bounceBody, secret));
+    assertThat(status === 200, `status ${status}`);
+  });
+  await step("message status becomes bounced", async () => {
+    const message = await readMessage(sentId);
+    assertThat(message?.status === "bounced", message?.status);
+  });
+  await step("bounced address added to suppressions", async () => {
+    const suppressions = await listSuppressions();
+    assertThat(
+      suppressions.some(
+        (suppression) =>
+          suppression.address === addressFor("bounce") && suppression.reason === "hardbounce",
+      ),
+    );
+  });
+  const callbacksAfter = await countCallbacks();
+  await step("onEvent callback ran once", () =>
+    assertThat(callbacksAfter === callbacksBefore + 1, `${callbacksBefore} -> ${callbacksAfter}`),
   );
-  const callbacksAfter = run("example:webhookCallbackCount");
-  check("onEvent callback ran once", callbacksAfter === callbacksBefore + 1);
-  const status2 = await post(base, json, signature(json, secret));
-  check("replayed webhook returns 200", status2 === 200, `status ${status2}`);
-  check(
-    "replayed webhook does not rerun callback",
-    run("example:webhookCallbackCount") === callbacksAfter,
+  await step("replayed webhook returns 200", async () => {
+    const status = await postWebhook(bounceBody, signBody(bounceBody, secret));
+    assertThat(status === 200, `status ${status}`);
+  });
+  await step("replayed webhook does not rerun callback", async () =>
+    assertThat((await countCallbacks()) === callbacksAfter),
   );
-  const status3 = await post(base, json, signature(json, `${secret}x`));
-  check("bad signature returns 401", status3 === 401, `status ${status3}`);
-  const receiptsBefore = receiptCount();
-  const noId = events(undefined, { note: tag });
-  const status4 = await post(base, noId, signature(noId, secret));
-  check("signed body without webhook_request_id returns 200", status4 === 200, `status ${status4}`);
-  check("failed receipt recorded", receiptCount() === receiptsBefore + 1);
-  check(
-    "failed receipt does not run callback",
-    run("example:webhookCallbackCount") === callbacksAfter,
+  await step("bad signature returns 401", async () => {
+    const status = await postWebhook(bounceBody, signBody(bounceBody, `${secret}x`));
+    assertThat(status === 401, `status ${status}`);
+  });
+  const receiptsBefore = (await readReceipts()).length;
+  const unidentifiedBody = createBounceBody(undefined, { note: tag });
+  await step("signed body without webhook_request_id returns 200", async () => {
+    const status = await postWebhook(unidentifiedBody, signBody(unidentifiedBody, secret));
+    assertThat(status === 200, `status ${status}`);
+  });
+  await step("failed receipt recorded", async () =>
+    assertThat((await readReceipts()).length === receiptsBefore + 1),
+  );
+  await step("failed receipt does not run callback", async () =>
+    assertThat((await countCallbacks()) === callbacksAfter),
   );
 
-  const afterSuppressed = runError("example:sendEmail", {
-    to: addr("bounce"),
-    subject: "Blocked",
-    textbody: "Body",
+  const countStaleReceipts = async () =>
+    (await readReceipts()).filter((receipt) => receipt.reason === "stale_event").length;
+  const staleReceiptsBefore = await countStaleReceipts();
+  const undatedBody = JSON.stringify({
+    webhook_request_id: `${tag}-undated`,
+    event_name: ["delivered"],
+    event_message: [{ channel: "whatsapp", to: "+15550100002", client_reference: tag }],
   });
-  check(
-    "send to suppressed address is rejected as ZOHO_CPAAS_ALL_SUPPRESSED",
-    afterSuppressed !== null && afterSuppressed.includes("ZOHO_CPAAS_ALL_SUPPRESSED"),
+  await step("signed webhook without an event time returns 200", async () => {
+    const status = await postWebhook(undatedBody, signBody(undatedBody, secret));
+    assertThat(status === 200, `status ${status}`);
+  });
+  await step("webhook without an event time records one stale_event receipt", async () =>
+    assertThat((await countStaleReceipts()) === staleReceiptsBefore + 1),
   );
-  const mixed = run("example:sendTemplateBatch", {
-    recipients: [addr("bounce"), addr("fresh")],
-    templateKey: "smoke-template",
-  });
-  const mixedRows = mixed.map((id) => messageStatus(id));
-  check(
-    "suppressed batch row is suppressed without a provider call",
-    mixedRows.some((m) => m?.to === addr("bounce") && m.status === "suppressed"),
+  await step("webhook without an event time does not run callback", async () =>
+    assertThat((await countCallbacks()) === callbacksAfter),
   );
 
-  const pageTo = addr("page");
-  for (const n of [1, 2, 3])
-    run("example:sendEmail", { to: pageTo, subject: `P${n}`, textbody: "x" });
-  const page = (cursor) =>
-    run("example:list", {
-      recipient: pageTo,
+  await step("send to suppressed address is rejected as ZOHO_CPAAS_ALL_SUPPRESSED", async () => {
+    const outcome = await runFunction("example:sendEmail", {
+      to: addressFor("bounce"),
+      subject: "Blocked",
+      textbody: "Body",
+    }).then(
+      () => "accepted",
+      (error) => String(error instanceof Error ? error.message : error),
+    );
+    assertThat(outcome.includes("ZOHO_CPAAS_ALL_SUPPRESSED"), outcome);
+  });
+  await step("suppressed batch row is suppressed without a provider call", async () => {
+    const messageIds = await runFunction("example:sendTemplateBatch", {
+      recipients: [addressFor("bounce"), addressFor("fresh")],
+      templateKey: "smoke-template",
+    });
+    const messages = await Promise.all(messageIds.map((messageId) => readMessage(messageId)));
+    assertThat(
+      messages.some(
+        (message) => message?.to === addressFor("bounce") && message.status === "suppressed",
+      ),
+    );
+  });
+
+  const pageRecipient = addressFor("page");
+  for (const subject of ["P1", "P2", "P3"])
+    await runFunction("example:sendEmail", { to: pageRecipient, subject, textbody: "x" });
+  const listPage = (recipient, cursor) =>
+    runFunction("example:list", {
+      recipient,
       channel: "email",
       paginationOpts: { numItems: 2, cursor },
     });
-  const page1 = page(null);
-  const page2 = page(page1.continueCursor);
-  check("list page 1 has 2 rows", page1.page.length === 2 && page1.isDone === false);
-  check(
-    "list page 2 has the remaining row",
-    page2.page.length === 1 && !page1.page.some((m) => m.messageId === page2.page[0].messageId),
+  const firstPage = await listPage(pageRecipient, null);
+  await step("list page 1 has 2 rows", () =>
+    assertThat(firstPage.page.length === 2 && firstPage.isDone === false),
   );
-  const normalizedPage = run("example:list", {
-    recipient: pageTo.toUpperCase(),
-    channel: "email",
-    paginationOpts: { numItems: 2, cursor: null },
+  await step("list page 2 has the remaining row", async () => {
+    const secondPage = await listPage(pageRecipient, firstPage.continueCursor);
+    assertThat(
+      secondPage.page.length === 1 &&
+        !firstPage.page.some((message) => message.messageId === secondPage.page[0].messageId),
+    );
   });
-  check(
-    "list normalizes recipient before indexed lookup",
-    normalizedPage.page.length === 2 &&
-      normalizedPage.page.every((row, index) => row.messageId === page1.page[index]?.messageId),
+  await step("list normalizes recipient before indexed lookup", async () => {
+    const normalizedPage = await listPage(pageRecipient.toUpperCase(), null);
+    assertThat(
+      normalizedPage.page.length === 2 &&
+        normalizedPage.page.every(
+          (message, index) => message.messageId === firstPage.page[index]?.messageId,
+        ),
+    );
+  });
+  await step("removeSuppression removes the address", async () =>
+    assertThat(
+      (await runFunction("example:removeSuppression", { address: addressFor("bounce") })) === true,
+    ),
   );
-  check(
-    "removeSuppression removes the address",
-    run("example:removeSuppression", { address: addr("bounce") }) === true,
-  );
-  check(
-    "suppression list no longer has the address",
-    !run("example:listSuppressions", { paginationOpts: { numItems: 50, cursor: null } }).some(
-      (s) => s.address === addr("bounce"),
+  await step("suppression list no longer has the address", async () =>
+    assertThat(
+      !(await listSuppressions()).some(
+        (suppression) => suppression.address === addressFor("bounce"),
+      ),
     ),
   );
 
-  const waId = run("example:sendWhatsappTemplate", {
-    from: "+15550100001",
-    to: "+15550100002",
-    templateKey: "smoke-template",
+  await step("whatsapp.sendTemplate accepted", async () => {
+    const messageId = await runFunction("example:sendWhatsappTemplate", {
+      from: "+15550100001",
+      to: "+15550100002",
+      templateKey: "smoke-template",
+    });
+    assertThat((await waitForStatus(messageId, "accepted")).testMode === true);
   });
-  check("whatsapp.sendTemplate accepted", (await waitStatus(waId, "accepted")).testMode === true);
-  const smsId = run("example:sendSmsTemplate", {
-    senderKey: "smoke-sender",
-    to: "+919876543210",
-    templateKey: "smoke-template",
+  await step("sms.sendTemplate accepted", async () => {
+    const messageId = await runFunction("example:sendSmsTemplate", {
+      senderKey: "smoke-sender",
+      to: "+919876543210",
+      templateKey: "smoke-template",
+    });
+    assertThat((await waitForStatus(messageId, "accepted")).testMode === true);
   });
-  check("sms.sendTemplate accepted", (await waitStatus(smsId, "accepted")).testMode === true);
-} catch (error) {
-  failures.push(`fatal: ${error instanceof Error ? error.message : String(error)}`);
-} finally {
-  await stopDev(dev);
-  release?.();
-  if (isolated) {
-    process.chdir(isolated.sourceRoot);
-    rmSync(isolated.dir, { recursive: true, force: true });
-  }
-}
-
-console.log("\nSmoke summary");
-for (const r of results)
-  console.log(`  ${r.ok ? "PASS" : "FAIL"}  ${r.name}${r.ok || !r.detail ? "" : ` (${r.detail})`}`);
-if (failures.length > 0) {
-  console.error(`\n${failures.length} failure(s):\n  ${failures.join("\n  ")}`);
-  process.exit(1);
-}
-console.log(`\nAll ${results.length} checks passed in the real Convex runtime.`);
+});

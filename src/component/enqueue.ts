@@ -13,25 +13,26 @@ import { boundedString } from "../shared/bounds.js";
 import { sha256Hex } from "../shared/crypto.js";
 import { stableStringify } from "../shared/record.js";
 import {
-  emailBatchArgs,
-  emailSendArgs,
-  emailTemplateArgs,
-  emailTemplateBatchArgs,
-  smsTemplateArgs,
-  whatsappTemplateArgs,
+  emailBatchArgsValidator,
+  emailSendArgsValidator,
+  emailTemplateArgsValidator,
+  emailTemplateBatchArgsValidator,
+  smsTemplateArgsValidator,
+  whatsappTemplateArgsValidator,
 } from "../shared/validators.js";
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { env, type MutationCtx } from "./_generated/server.js";
-import { providerConfiguration, readConfig, resolveTestMode } from "./config.js";
+import { readConfig } from "../shared/config.js";
+import { providerConfiguration, readTestMode } from "./config.js";
 import { pool } from "./pool.js";
 
 type Channel = Doc<"messages">["channel"];
 type EmailArgs =
-  | Infer<typeof emailSendArgs>
-  | Infer<typeof emailTemplateArgs>
-  | Infer<typeof emailBatchArgs>
-  | Infer<typeof emailTemplateBatchArgs>;
+  | Infer<typeof emailSendArgsValidator>
+  | Infer<typeof emailTemplateArgsValidator>
+  | Infer<typeof emailBatchArgsValidator>
+  | Infer<typeof emailTemplateBatchArgsValidator>;
 
 function assertSendConfiguration(channel: Channel, testMode: boolean): void {
   if (testMode) return;
@@ -92,10 +93,10 @@ export async function enqueueEmail(
   batch: boolean,
 ): Promise<Id<"messages">[]> {
   const request = stableStringify({ path, args });
-  const testMode = resolveTestMode(args.testMode);
-  assertSendConfiguration("email", testMode);
+  const testMode = readTestMode(args.testMode);
   const prior = await existingIds(ctx, args.idempotencyKey, request);
   if (prior) return prior;
+  assertSendConfiguration("email", testMode);
   const allTo: EmailRecipient[] = args.to.map((item) =>
     "emailAddress" in item ? item : { emailAddress: item },
   );
@@ -109,18 +110,11 @@ export async function enqueueEmail(
     throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   if (batch && allTo.length + (args.cc?.length ?? 0) + (args.bcc?.length ?? 0) > 500)
     throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
-  if (batch && !allTo.length) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   buildEmailPayload(
     args,
     batch ? allTo : allTo.map((r) => r.emailAddress),
     args.clientReference ?? "validation",
   );
-  if (
-    batch &&
-    !args.clientReference &&
-    allTo.some((r) => Object.hasOwn(r.mergeInfo ?? {}, "__onx_ref"))
-  )
-    throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   const preparedTo: EmailRecipient[] = [];
   const preparedCc: EmailAddress[] = [];
   const preparedBcc: EmailAddress[] = [];
@@ -175,34 +169,9 @@ export async function enqueueEmail(
       }),
     );
   }
-  if (!ids.length) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   const firstQueued = recipients.findIndex((r) => r.status === "queued");
-  const clientReference =
-    args.clientReference ??
-    (batch ? "{{__onx_ref}}" : String(ids[firstQueued < 0 ? 0 : firstQueued]));
-  for (const id of ids)
-    await ctx.db.patch("messages", id, {
-      clientReference: args.clientReference ?? (batch ? String(id) : clientReference),
-    });
-  if (batch && !args.clientReference) {
-    const sharedMergeInfo = "mergeInfo" in args ? args.mergeInfo : undefined;
-    for (let index = 0, queuedIndex = 0; index < allTo.length; index++) {
-      const recipient = recipients[index];
-      if (!recipient || recipient.status !== "queued") continue;
-      const item = preparedTo[queuedIndex];
-      const id = ids[index];
-      if (!item || !id) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
-      preparedTo[queuedIndex] = {
-        ...item,
-        mergeInfo: {
-          ...sharedMergeInfo,
-          ...item.mergeInfo,
-          ["__onx_ref"]: String(id),
-        },
-      };
-      queuedIndex++;
-    }
-  }
+  const clientReference = args.clientReference ?? String(ids[firstQueued]);
+  for (const id of ids) await ctx.db.patch("messages", id, { clientReference });
   const input = { ...args, cc: preparedCc, bcc: preparedBcc };
   const prepared = batch ? preparedTo : preparedTo.map((r) => r.emailAddress);
   const payload = buildEmailPayload(input, prepared, clientReference);
@@ -230,11 +199,10 @@ export async function enqueueEmail(
 
 export async function enqueueTemplate(
   ctx: MutationCtx,
-  args: Infer<typeof smsTemplateArgs> | Infer<typeof whatsappTemplateArgs>,
+  args: Infer<typeof smsTemplateArgsValidator> | Infer<typeof whatsappTemplateArgsValidator>,
   channel: "sms" | "whatsapp",
 ) {
-  const testMode = resolveTestMode(args.testMode);
-  assertSendConfiguration(channel, testMode);
+  const testMode = readTestMode(args.testMode);
   const request = stableStringify({ channel, args });
   const prior = await existingIds(ctx, args.idempotencyKey, request);
   if (prior) {
@@ -242,6 +210,7 @@ export async function enqueueTemplate(
     if (!first) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
     return first;
   }
+  assertSendConfiguration(channel, testMode);
   const to = normalizeRecipient(channel, args.to);
   const isSuppressed = await suppressed(ctx, channel, to);
   if ("senderKey" in args) buildSmsPayload(args, args.clientReference ?? "validation");

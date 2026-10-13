@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import { api } from "./_generated/api.js";
 import schema from "./schema.js";
+import { expectZohoCpaasError } from "../test-helpers.js";
 
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
 
@@ -36,12 +37,13 @@ test("removing a suppression normalizes the address and rejects invalid input", 
       address: "alice@example.test",
     }),
   ).toBe(false);
-  await expect(
+  await expectZohoCpaasError(
     t.mutation(api.suppressions.remove, {
       channel: "email",
       address: "not-an-email",
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
+    "ZOHO_CPAAS_INVALID_ARGUMENT",
+  );
 });
 
 test("suppressions are listed and removed per channel with channel-specific normalization", async () => {
@@ -76,7 +78,8 @@ test("suppressions are listed and removed per channel with channel-specific norm
   ).toBe(true);
   expect((await list("email")).page).toHaveLength(1);
   for (const channel of ["sms", "whatsapp"] as const)
-    await expect(
+    await expectZohoCpaasError(
       t.mutation(api.suppressions.remove, { channel, address: "12" }),
-    ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
+      "ZOHO_CPAAS_INVALID_ARGUMENT",
+    );
 });

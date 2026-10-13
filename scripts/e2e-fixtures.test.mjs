@@ -179,14 +179,14 @@ describe("e2e fixture redaction", () => {
       ],
     };
     const rawBody = `data=${encodeURIComponent(JSON.stringify(payload))}`;
-    const original = parseWebhookBody(rawBody, 1704067200000);
+    const original = parseWebhookBody(rawBody);
     expect(original?.events[0]).toMatchObject({
       type: "click",
       channel: "email",
       recipient: "alice@private.example",
     });
     const fixture = sanitizeE2eFixture({ rawBody, parserResult: original });
-    const sanitized = parseWebhookBody(fixture.body, 1704067200000);
+    const sanitized = parseWebhookBody(fixture.body);
     const sanitizedPayload = JSON.parse(decodeURIComponent(fixture.body.slice(5)));
     expect(sanitizedPayload.event_name).toEqual(["Email-Link-Click"]);
     const addresses = sanitizedPayload.event_message[0].email_info.to.map(

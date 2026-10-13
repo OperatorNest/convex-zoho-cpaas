@@ -34,7 +34,13 @@ export function canTransitionStatus(
   if (next === "canceled" || next === "suppressed") return current === "queued";
   if (next === "bounced" || next === "complained") return channel === "email";
   if (next === "unknown") return current === "sending" || current === "queued";
-  if (next === "failed") return true;
+  if (next === "failed")
+    return (
+      current === "queued" ||
+      current === "sending" ||
+      current === "accepted" ||
+      current === "unknown"
+    );
   if (channel === "email" && (next === "delivered" || next === "read")) return false;
   if (channel === "sms" && next === "read") return false;
   return (rank[next] ?? -1) > (rank[current] ?? -1);

@@ -4,8 +4,8 @@
 
 - Breaking: move channel sends to `email`, `sms` and `whatsapp` component modules, remove `experimental`, and move uploads to `files.upload`.
 - Breaking: use `htmlbody` and `textbody` for inline email content and `zohoMessageId`, `zohoRequestId`, `zohoEventId` and `zohoAgentId` for provider identifiers.
-- Breaking: rename stored reads to `messages.get` and `messages.list`, configuration reads to `messages.getConfig(ctx, {})` with a required empty argument object, and return `ZOHO_CPAAS_NOT_FOUND` for missing referenced messages.
-- Breaking: export `ZOHO_CPAAS_ERROR_CODES`, `ZohoCpaasErrorCode`, `ZohoCpaasErrorData` and `isZohoCpaasError`, with fixed messages and `retryable` only on provider and network errors.
+- Breaking: rename stored reads to `messages.get` and `messages.list`, and return `ZOHO_CPAAS_NOT_FOUND` for missing referenced messages.
+- Breaking: export `ZOHO_CPAAS_ERROR_CODES`, `ZohoCpaasErrorCode`, `ZohoCpaasErrorData` and `isZohoCpaasError`, with fixed messages and `retryable` exactly on provider and network errors.
 - Breaking: replace validation, configuration, provider rejection and unusable-success codes with `ZOHO_CPAAS_INVALID_ARGUMENT`, `ZOHO_CPAAS_NOT_CONFIGURED`, `ZOHO_CPAAS_PROVIDER_ERROR` and `ZOHO_CPAAS_INVALID_RESPONSE`; uploads distinguish provider, network and response failures.
 - Breaking: reject malformed component env values, including retention days, instead of selecting a default; unset retention remains 30 days.
 - Breaking: store effective `testMode` on all provider-operation rows and rename indexes with the provider identifier fields; regenerate bindings for the new schema.

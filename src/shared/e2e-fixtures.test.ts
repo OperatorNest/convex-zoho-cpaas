@@ -26,7 +26,7 @@ test.skipIf(e2eFixtures.length === 0)(
   async () => {
     for (const [path, load] of e2eFixtures) {
       const { default: fixture } = await load();
-      const parsed = parseWebhookBody(fixture.body, 1704067200000);
+      const parsed = parseWebhookBody(fixture.body);
       if (fixture.expected === null) {
         expect(parsed, path).toBeNull();
         continue;

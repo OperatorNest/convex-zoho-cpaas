@@ -11,7 +11,7 @@ const zohoCpaas = new ZohoCpaas(components.zohoCpaas, {
 export const getConfig = internalQuery({
   args: {},
   returns: v.object({ configured: v.boolean(), testMode: v.boolean(), region: v.string() }),
-  handler: (ctx) => zohoCpaas.messages.getConfig(ctx, {}),
+  handler: (ctx) => zohoCpaas.config.get(ctx),
 });
 
 export const sendEmail = internalMutation({

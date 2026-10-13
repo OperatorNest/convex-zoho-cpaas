@@ -1,5 +1,4 @@
 import { isRecord } from "./record.js";
-import { createErrorData } from "./error-data.js";
 import { zohoCpaasError, type ZohoCpaasErrorCode } from "./errors.js";
 import type { Channel } from "./status.js";
 
@@ -139,13 +138,14 @@ export function classifyProviderError(
     (!permanentClass || dailyOverride) &&
     (retryStatus || dailyOverride);
   return {
+    ...zohoCpaasError("ZOHO_CPAAS_PROVIDER_ERROR", {
+      retryable,
+      providerStatus: httpStatus,
+      providerCode: primaryCode ?? subCode,
+    }).data,
     retryable,
     accountState,
     explicitZohoCode,
-    ...createErrorData(tooLong ? "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG" : "ZOHO_CPAAS_PROVIDER_ERROR", {
-      providerStatus: httpStatus,
-      providerCode: primaryCode ?? subCode,
-    }),
     ...(subCode ? { subCode } : {}),
     ...(retryable && dailyOverride
       ? { retryAfterMs: Math.max(retryAfterMs ?? 0, MAX_RETRY_AFTER_MS) }
@@ -156,10 +156,11 @@ export function classifyProviderError(
 }
 
 export function classifyNetworkError(channel: Channel): ClassifiedError {
+  const retryable = channel === "email";
   return {
-    retryable: channel === "email",
+    ...zohoCpaasError("ZOHO_CPAAS_NETWORK_ERROR", { retryable }).data,
+    retryable,
     accountState: false,
-    ...createErrorData("ZOHO_CPAAS_NETWORK_ERROR"),
   };
 }
 

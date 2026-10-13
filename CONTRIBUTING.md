@@ -2,7 +2,7 @@
 
 Read [README](README.md), [AGENTS.md](AGENTS.md), and [ADRs](docs/adr/) before changing behavior.
 
-## Setup and checks
+## Setup
 
 ```sh
 mise trust
@@ -10,11 +10,18 @@ mise install
 mise exec -- pnpm install --frozen-lockfile
 CONVEX_AGENT_MODE=anonymous mise exec -- pnpm exec convex init
 mise exec -- pnpm build:codegen
+```
+
+Node 24 and pnpm 12.9.1 are pinned in `.mise.toml`. Codegen and smoke use an anonymous local deployment under a shared lock; no Convex login is needed. Do not edit generated bindings.
+
+## Checks
+
+```sh
 mise exec -- pnpm check
 mise exec -- pnpm smoke
 ```
 
-Node 24 and pnpm 12.9.1 are pinned in `.mise.toml`. Codegen and smoke use an anonymous local deployment under a shared lock; no Convex login is needed. Do not edit generated bindings. `check` runs formatting, build, lint, typecheck, Knip, source invariants, and coverage floors. Component and shared runtime changes also require codegen and smoke.
+`check` runs formatting, build, lint, typecheck, Knip, source invariants, and coverage floors. Component and shared runtime changes also require codegen and smoke. Smoke builds the package, copies it into a temporary workspace, starts an anonymous local backend on free ports and runs the domain steps in `scripts/smoke.mjs`.
 
 ## Change requirements
 
@@ -41,8 +48,10 @@ A maintainer prepares ignored `.env.e2e` from `.env.e2e.example` using their own
 
 The runner checks acceptance, signed events, mapping, callback correlation, replay deduplication, and optional suppression. It saves redacted fixtures and a dated report in `tests/fixtures/e2e/`; inspect them before committing. The session-gated capture route accepts at most 64 attempts. Raw captures are removed on exit or expire after 30 minutes. Do not run e2e in CI. `pnpm e2e:env` loads accepted env names without provider calls.
 
-## Reports and releases
+## Bug reports
 
 Bug reports include package, Convex, and Node versions, deployment type, operation, channel, reproduction, expected result, and actual result. Remove credentials, recipients, message content, and personal data. Send vulnerabilities through [private reporting](https://github.com/OperatorNest/convex-zoho-cpaas/security/advisories/new). Follow the [Code of Conduct](https://github.com/OperatorNest/.github/blob/main/CODE_OF_CONDUCT.md) and [support guidance](https://github.com/OperatorNest/.github/blob/main/SUPPORT.md).
+
+## Releasing
 
 Add one changeset for a user-visible change. A maintainer runs `pnpm changeset version` on a version branch and merges it through a PR. Release publishes an unpublished package version through npm trusted publishing after CI and smoke pass on that commit. Pushing, publishing, deploying, and registry submissions require explicit authorization.

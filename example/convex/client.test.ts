@@ -2,7 +2,7 @@ import { convexTest } from "convex-test";
 import { httpRouter, type HttpRouter } from "convex/server";
 import { afterEach, expect, test, vi } from "vitest";
 import { ZohoCpaas, isZohoCpaasError, registerRoutes } from "../../src/client/index.js";
-import { atOrThrow, signWebhook } from "../../src/test-helpers.js";
+import { atOrThrow, createEventTimeFields, signWebhook } from "../../src/test-helpers.js";
 import { register } from "../../src/test.js";
 import { components } from "./_generated/api.js";
 import schema from "./schema.js";
@@ -33,7 +33,7 @@ test("every public client method forwards to its component function", async () =
     defaultFrom: { address: "sender@example.test" },
   });
 
-  expect(await t.query((ctx) => client.messages.getConfig(ctx, {}))).toMatchObject({
+  expect(await t.query((ctx) => client.config.get(ctx))).toMatchObject({
     testMode: true,
     region: "in",
   });
@@ -200,7 +200,7 @@ test("source client route verifies signed bodies and maps boundary failures", as
   const body = JSON.stringify({
     webhook_request_id: "client-route-1",
     event_name: ["open"],
-    event_message: [{ occurred_at: Date.now(), email_info: {} }],
+    event_message: [{ ...createEventTimeFields(Date.now()), email_info: {} }],
   });
   const signature = await signWebhook(body);
   const signed = {

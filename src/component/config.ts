@@ -1,13 +1,13 @@
-import { env } from "./_generated/server.js";
+import { v } from "convex/values";
+import { env, query } from "./_generated/server.js";
 import { zohoCpaasError } from "../shared/errors.js";
 import { isIndiaBaseUrl, normalizeToken } from "../shared/provider.js";
 import type { Channel } from "../shared/status.js";
-import { readConfig } from "../shared/config.js";
-export { readConfig } from "../shared/config.js";
+import { readConfig, resolveTestMode } from "../shared/config.js";
 
-export function resolveTestMode(option: boolean | undefined): boolean {
-  const config = readConfig(env);
-  return option === true || config.testMode;
+export function readTestMode(requested: boolean | undefined): boolean {
+  readConfig(env);
+  return resolveTestMode(requested, env);
 }
 
 export function tokenFor(channel: Channel): string | undefined {
@@ -36,3 +36,13 @@ export function providerConfiguration(channel: Channel): {
   if (!token) throw zohoCpaasError("ZOHO_CPAAS_NOT_CONFIGURED");
   return { baseUrl: providerBaseUrl(channel), authorization: normalizeToken(token) };
 }
+
+export const get = query({
+  args: {},
+  returns: v.object({ configured: v.boolean(), testMode: v.boolean(), region: v.string() }),
+  handler: () => ({
+    configured: !!tokenFor("email"),
+    testMode: readTestMode(undefined),
+    region: readConfig(env).region,
+  }),
+});

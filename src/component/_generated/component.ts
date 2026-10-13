@@ -23,6 +23,15 @@ import type { FunctionReference } from "convex/server";
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
+    config: {
+      get: FunctionReference<
+        "query",
+        "internal",
+        {},
+        { configured: boolean; region: string; testMode: boolean },
+        Name
+      >;
+    };
     email: {
       send: FunctionReference<
         "mutation",
@@ -213,9 +222,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               | "ZOHO_CPAAS_UNSUPPORTED_REGION"
               | "ZOHO_CPAAS_PROVIDER_ERROR"
               | "ZOHO_CPAAS_NETWORK_ERROR"
-              | "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED"
-              | "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG"
-              | "ZOHO_CPAAS_STUCK"
               | "ZOHO_CPAAS_INVALID_RESPONSE";
             message: string;
             providerCode?: string;
@@ -247,13 +253,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           zohoMessageId?: string;
           zohoRequestId?: string;
         },
-        Name
-      >;
-      getConfig: FunctionReference<
-        "query",
-        "internal",
-        {},
-        { configured: boolean; region: string; testMode: boolean },
         Name
       >;
       list: FunctionReference<
@@ -305,9 +304,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
                 | "ZOHO_CPAAS_UNSUPPORTED_REGION"
                 | "ZOHO_CPAAS_PROVIDER_ERROR"
                 | "ZOHO_CPAAS_NETWORK_ERROR"
-                | "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED"
-                | "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG"
-                | "ZOHO_CPAAS_STUCK"
                 | "ZOHO_CPAAS_INVALID_RESPONSE";
               message: string;
               providerCode?: string;
@@ -514,7 +510,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             | "invalid_signature"
             | "missing_secret"
             | "oversized_body"
-            | "invalid_payload";
+            | "invalid_payload"
+            | "stale_event";
         },
         Name
       >;

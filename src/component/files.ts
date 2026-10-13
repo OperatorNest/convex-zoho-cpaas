@@ -4,7 +4,7 @@ import { classifyProviderError } from "../shared/retry.js";
 import { zohoCpaasError } from "../shared/errors.js";
 import { validateUploadFile } from "../shared/provider.js";
 import { action } from "./_generated/server.js";
-import { providerConfiguration, resolveTestMode, tokenFor } from "./config.js";
+import { providerConfiguration, readTestMode, tokenFor } from "./config.js";
 
 export const upload = action({
   args: {
@@ -16,35 +16,41 @@ export const upload = action({
   returns: v.string(),
   handler: async (_ctx, args) => {
     validateUploadFile(args.name, args.mimeType, args.content.byteLength);
-    const testMode = resolveTestMode(args.testMode);
+    const testMode = readTestMode(args.testMode);
     if (testMode) return `test-file-${crypto.randomUUID()}`;
     if (!tokenFor("email")) throw zohoCpaasError("ZOHO_CPAAS_NOT_CONFIGURED");
     const { baseUrl, authorization } = providerConfiguration("email");
-    const body = new FormData();
-    body.append("file", new Blob([args.content], { type: args.mimeType }), args.name);
-    let response: Response | undefined;
-    let raw: string;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
+    let response: Response;
+    let raw: string | undefined;
     try {
-      response = await fetch(`${baseUrl}/files`, {
-        method: "POST",
-        headers: { Authorization: authorization, Accept: "application/json" },
-        body,
-        signal: controller.signal,
-      });
-      raw = await response.text();
-    } catch {
-      console.warn("ZOHO_CPAAS_NETWORK_ERROR");
-      throw zohoCpaasError(response ? "ZOHO_CPAAS_INVALID_RESPONSE" : "ZOHO_CPAAS_NETWORK_ERROR", {
-        retryable: false,
-      });
+      try {
+        response = await fetch(`${baseUrl}/files?name=${encodeURIComponent(args.name)}`, {
+          method: "POST",
+          headers: {
+            Authorization: authorization,
+            "Content-Type": args.mimeType,
+            Accept: "application/json",
+          },
+          body: args.content,
+          signal: controller.signal,
+        });
+      } catch {
+        console.warn("ZOHO_CPAAS_NETWORK_ERROR");
+        throw zohoCpaasError("ZOHO_CPAAS_NETWORK_ERROR", { retryable: true });
+      }
+      try {
+        raw = await response.text();
+      } catch {
+        raw = undefined;
+      }
     } finally {
       clearTimeout(timeout);
     }
     let parsed: unknown;
     try {
-      parsed = raw.length <= 65536 ? JSON.parse(raw) : null;
+      parsed = raw !== undefined && raw.length <= 65536 ? JSON.parse(raw) : null;
     } catch {
       parsed = null;
     }

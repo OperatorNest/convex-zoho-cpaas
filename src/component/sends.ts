@@ -1,8 +1,7 @@
 import { isRecord } from "../shared/record.js";
 import { v } from "convex/values";
-import { createErrorData } from "../shared/error-data.js";
 import { classifyNetworkError, classifyProviderError, retryBackoffMs } from "../shared/retry.js";
-import { isZohoCpaasError, type ZohoCpaasErrorCode } from "../shared/errors.js";
+import { isZohoCpaasError, zohoCpaasError, type ZohoCpaasErrorCode } from "../shared/errors.js";
 import { normalizeEmail } from "../shared/provider.js";
 import { canTransitionStatus } from "../shared/status.js";
 import { reconcileRequestEvents } from "./webhooks.js";
@@ -53,21 +52,26 @@ export const begin = internalMutation({
         ? providerBaseUrl(job.channel)
         : providerConfiguration(job.channel).baseUrl;
     } catch (error) {
-      configurationError = createErrorData(
-        isZohoCpaasError(error) ? error.data.code : "ZOHO_CPAAS_NOT_CONFIGURED",
-      );
+      configurationError = isZohoCpaasError(error)
+        ? error.data
+        : zohoCpaasError("ZOHO_CPAAS_NOT_CONFIGURED").data;
     }
     const active: string[] = [];
     for (const id of job.messageIds) {
       const row = await ctx.db.get("messages", id);
-      if (
-        !row ||
-        row.canceledAt !== undefined ||
-        (row.status !== "queued" &&
-          row.status !== "sending" &&
-          !(row.status === "unknown" && job.channel === "email"))
-      )
+      if (!row || row.canceledAt !== undefined) continue;
+      const isResendable =
+        row.status === "queued" ||
+        (job.channel === "email" && (row.status === "sending" || row.status === "unknown"));
+      if (!isResendable) {
+        if (row.status === "sending")
+          await ctx.db.patch("messages", id, {
+            status: "unknown",
+            failureDefinitive: false,
+            sendingAt: undefined,
+          });
         continue;
+      }
       const suppression = await ctx.db
         .query("suppressions")
         .withIndex("by_channel_and_address", (q) =>
@@ -201,7 +205,7 @@ export const execute = internalAction({
       if (!isRecord(parsed))
         return {
           kind: "failed",
-          error: createErrorData("ZOHO_CPAAS_INVALID_ARGUMENT"),
+          error: zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT").data,
           failureDefinitive: true,
         };
       let payload = parsed;
@@ -209,7 +213,7 @@ export const execute = internalAction({
       if (job.channel === "email" && (!Array.isArray(payload.to) || payload.to.length === 0))
         return {
           kind: "failed",
-          error: createErrorData("ZOHO_CPAAS_INVALID_ARGUMENT"),
+          error: zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT").data,
           failureDefinitive: true,
         };
       if (job.testMode)
@@ -270,7 +274,7 @@ export const execute = internalAction({
           (response.status < 500 && response.status !== 408) ||
           classified.accountState ||
           (response.status >= 500 && classified.explicitZohoCode === true),
-        error: createErrorData(classified.code, classified),
+        error: zohoCpaasError(classified.code, classified).data,
         retryable: classified.retryable,
         ...(classified.retryAfterMs === undefined ? {} : { retryAfterMs: classified.retryAfterMs }),
         ...(job.channel === "sms" && !classified.retryable && recipientFailure(body)
@@ -282,9 +286,9 @@ export const execute = internalAction({
         return {
           kind: "failed",
           failureDefinitive: true,
-          error: createErrorData(
-            isZohoCpaasError(error) ? error.data.code : "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED",
-          ),
+          error: isZohoCpaasError(error)
+            ? error.data
+            : zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT").data,
         };
       if (response?.ok)
         return {
@@ -296,7 +300,7 @@ export const execute = internalAction({
       return {
         kind: "failed",
         failureDefinitive: false,
-        error: createErrorData(classified.code, classified),
+        error: zohoCpaasError(classified.code, classified).data,
         retryable: classified.retryable,
       };
     } finally {
@@ -323,7 +327,9 @@ export const complete = pool.defineOnComplete<
           ? { kind: "skipped" }
           : {
               kind: "failed",
-              error: createErrorData("ZOHO_CPAAS_WORKPOOL_ACTION_FAILED"),
+              error: zohoCpaasError("ZOHO_CPAAS_NETWORK_ERROR", {
+                retryable: job.channel === "email",
+              }).data,
               retryable: job.channel === "email",
               failureDefinitive: false,
             };

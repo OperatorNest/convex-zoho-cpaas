@@ -50,6 +50,19 @@ export function regionBaseUrl(region: string | undefined, override?: string): st
   throw zohoCpaasError("ZOHO_CPAAS_NOT_CONFIGURED");
 }
 
+const regionHostSuffixes: [string, Region][] = [
+  [".com.au", "au"],
+  [".com.cn", "cn"],
+  [".eu", "eu"],
+  [".in", "in"],
+  [".jp", "jp"],
+];
+
+export function regionFromBaseUrl(baseUrl: string): Region {
+  const hostname = new URL(baseUrl).hostname.toLowerCase();
+  return regionHostSuffixes.find(([suffix]) => hostname.endsWith(suffix))?.[1] ?? "us";
+}
+
 export function normalizeToken(token: string): string {
   const stripped = token
     .trim()
@@ -112,8 +125,16 @@ export type EmailInput = {
 const MAX_RECIPIENTS = 500;
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 
+const MIME_TYPE_PATTERN = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
+
 export function validateUploadFile(name: string, mimeType: string, byteLength: number): void {
-  if (!name || name.length > 150 || !mimeType || byteLength > MAX_UPLOAD_BYTES)
+  if (
+    !name ||
+    name.length > 150 ||
+    mimeType.length > 255 ||
+    !MIME_TYPE_PATTERN.test(mimeType) ||
+    byteLength > MAX_UPLOAD_BYTES
+  )
     throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
 }
 
@@ -227,7 +248,7 @@ export function buildEmailPayload(
   if (input.textbody) payload.textbody = input.textbody;
   if (input.templateKey) payload.template_key = input.templateKey;
   if (input.templateAlias) payload.template_alias = input.templateAlias;
-  if (input.mergeInfo) payload.merge_info = input.mergeInfo;
+  if (input.mergeInfo && !batch) payload.merge_info = input.mergeInfo;
   if (input.trackOpens !== undefined) payload.track_opens = input.trackOpens;
   if (input.trackClicks !== undefined) payload.track_clicks = input.trackClicks;
   if (input.mimeHeaders) payload.mime_headers = input.mimeHeaders;

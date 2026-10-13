@@ -1,4 +1,4 @@
-import { atOrThrow } from "../test-helpers.js";
+import { atOrThrow, drain, required } from "../test-helpers.js";
 
 import { register as registerWorkpool } from "@convex-dev/workpool/test";
 import { convexTest } from "convex-test";
@@ -84,16 +84,14 @@ test("a crash before begin keeps a canceled retry non-replayable", async () => {
     testMode: true,
   };
   const ids = await t.mutation(api.email.send, args);
-  const messageId = ids.at(0);
-  if (messageId === undefined) throw new Error("Expected sent message");
+  const messageId = required(ids.at(0), "sent message");
   const row = await t.query(api.messages.get, { messageId });
-  if (!row?.jobId) throw new Error("Expected send job for message");
-  const jobId = row.jobId;
+  const jobId = required(row.jobId, "send job for message");
   const job = await t.run((ctx) => ctx.db.get("sendJobs", jobId));
-  if (!job?.workId) throw new Error("Expected queued work ID");
+  const workId = required(job?.workId, "queued work ID");
   await t.mutation(internal.sends.complete, {
-    workId: job.workId,
-    context: { jobId: row.jobId, attempt: 1 },
+    workId,
+    context: { jobId, attempt: 1 },
     result: { kind: "failed", error: "worker crashed before begin" },
   });
   expect(await t.query(api.messages.get, { messageId })).toMatchObject({
@@ -208,6 +206,29 @@ test("an attempt excludes recipients suppressed after enqueue", async () => {
   });
 });
 
+test("a repeated attempt does not resend a WhatsApp message left sending", async () => {
+  vi.useFakeTimers();
+  const t = createComponentTest();
+  const messageId = await t.mutation(api.whatsapp.sendTemplate, {
+    from: "+15550100001",
+    to: "+15550100002",
+    templateKey: "template",
+    testMode: true,
+  });
+  const message = await t.query(api.messages.get, { messageId });
+  if (!message?.jobId) throw new Error("Missing job");
+  const jobId = message.jobId;
+  expect(await t.mutation(internal.sends.begin, { jobId, attempt: 1 })).toMatchObject({
+    active: ["+15550100002"],
+  });
+  expect(await t.mutation(internal.sends.begin, { jobId, attempt: 2 })).toBeNull();
+  expect(await t.query(api.messages.get, { messageId })).toMatchObject({
+    status: "unknown",
+    failureDefinitive: false,
+    attempts: 1,
+  });
+});
+
 test.each([false, true])(
   "transport completion preserves a delivered webhook before completion=%s",
   async (early) => {
@@ -287,12 +308,12 @@ test("an SMS action failure before fetch permits a new send with the same idempo
   if (!message?.jobId) throw new Error("Missing job");
   const jobId = message.jobId;
   await t.run((ctx) => ctx.db.patch("sendJobs", jobId, { payload: "{broken" }));
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).not.toHaveBeenCalled();
   expect(await t.query(api.messages.get, { messageId: id })).toMatchObject({
     status: "failed",
     failureDefinitive: true,
-    error: { code: "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED" },
+    error: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" },
   });
   expect(await t.mutation(api.sms.sendTemplate, args)).not.toBe(id);
 });
@@ -353,7 +374,7 @@ test.each(["sms", "whatsapp"] as const)(
               idempotencyKey: "proxy-failure",
             });
       const id = await sendMessage();
-      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await drain(t);
       expect(await t.query(api.messages.get, { messageId: id })).toMatchObject({
         status: "unknown",
         failureDefinitive: false,

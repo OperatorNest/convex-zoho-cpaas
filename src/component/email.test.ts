@@ -5,6 +5,7 @@ import { api } from "./_generated/api.js";
 import schema from "./schema.js";
 
 import { send } from "./email.js";
+import { expectZohoCpaasError } from "../test-helpers.js";
 
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
 const emailRequest = {
@@ -50,18 +51,20 @@ test("send rethrows a non-package backend error unchanged", async () => {
 test("send rejects oversized identifiers independently of encoded payload size", async () => {
   vi.useFakeTimers();
   const t = createComponentTest();
-  await expect(
+  await expectZohoCpaasError(
     t.mutation(api.email.send, { ...emailRequest, idempotencyKey: "k".repeat(201) }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
-  await expect(
+    "ZOHO_CPAAS_INVALID_ARGUMENT",
+  );
+  await expectZohoCpaasError(
     t.mutation(api.email.sendTemplate, {
       from: emailRequest.from,
       to: emailRequest.to,
       templateKey: "k".repeat(201),
       testMode: true,
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
-  await expect(
+    "ZOHO_CPAAS_INVALID_ARGUMENT",
+  );
+  await expectZohoCpaasError(
     t.mutation(api.whatsapp.sendTemplate, {
       from: "+15550100001",
       to: "+15550100002",
@@ -69,6 +72,7 @@ test("send rejects oversized identifiers independently of encoded payload size",
       zohoAgentId: "a".repeat(201),
       testMode: true,
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
+    "ZOHO_CPAAS_INVALID_ARGUMENT",
+  );
   expect(await t.run((ctx) => ctx.db.query("messages").take(1))).toEqual([]);
 });

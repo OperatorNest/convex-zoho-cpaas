@@ -6,6 +6,6 @@ Report vulnerabilities in `@operatornest/convex-zoho-cpaas` through the package 
 
 The app authenticates and authorizes callers before invoking `ZohoCpaas`. Report paths that bypass those boundaries or disclose component credentials prefixed `ZOHO_CPAAS_`.
 
-## Component boundaries
+## Boundaries
 
-Bind credentials to component env. The component verifies signatures before applying webhook events; apps authenticate and authorize their own functions and restrict access to stored raw provider data. Rotate leaked signing keys. Committed-receipt deduplication lasts at least 30 days. Every event requires a timestamp in the signed body, no older than receipt retention minus one day and no more than five minutes in the future. Bodies outside that bound, or without usable event timestamps, fail as invalid signatures without a receipt; refreshing the unsigned header timestamp cannot bypass the bound.
+Bind credentials to component env. The component verifies signatures before applying webhook events; apps authenticate and authorize their own functions and restrict access to stored raw provider data. Rotate leaked signing keys. Committed-receipt deduplication lasts at least 30 days. Every event requires a documented event time in the signed body, no older than receipt retention minus one day and no more than five minutes in the future. A correctly signed body outside that bound, or without a usable event time, is stored as a `stale_event` failed receipt that applies no event and invokes no callback; refreshing the unsigned header timestamp cannot bypass the bound.

@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { internal } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
 import schema from "./schema.js";
+import { drain, expectZohoCpaasError } from "../test-helpers.js";
 
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
 const DAY = 86_400_000;
@@ -147,17 +148,17 @@ test("cleanup marks stuck sends unknown, blanks terminal jobs, and drains bounde
   expect(failed).toMatchObject({
     status: "unknown",
     failureDefinitive: false,
-    error: { code: "ZOHO_CPAAS_STUCK" },
+    error: { code: "ZOHO_CPAAS_NETWORK_ERROR" },
   });
   expect(await t.run((ctx) => ctx.db.get("messages", siblingStuck))).toMatchObject({
     status: "unknown",
-    error: { code: "ZOHO_CPAAS_STUCK" },
+    error: { code: "ZOHO_CPAAS_NETWORK_ERROR" },
   });
   expect(await t.run((ctx) => ctx.db.get("sendJobs", stuckJob))).toMatchObject({
     finishedAt: expect.any(Number),
     payload: "",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(await t.run(async (ctx) => ctx.db.get("messages", pending))).not.toBeNull();
   expect(await t.run(async (ctx) => ctx.db.get("messages", whatsapp))).toBeNull();
   expect(await t.run(async (ctx) => ctx.db.get("messages", stuck))).not.toBeNull();
@@ -472,9 +473,7 @@ test.each(["abc", "0", "3651", "2.5", "", " 30 "])(
         terminalAt: 1,
       }),
     );
-    await expect(t.mutation(internal.cleanup.run, {})).rejects.toMatchObject({
-      data: { code: "ZOHO_CPAAS_NOT_CONFIGURED" },
-    });
+    await expectZohoCpaasError(t.mutation(internal.cleanup.run, {}), "ZOHO_CPAAS_NOT_CONFIGURED");
     expect(await t.run((ctx) => ctx.db.get("messages", messageId))).not.toBeNull();
   },
 );

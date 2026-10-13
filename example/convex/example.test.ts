@@ -3,7 +3,13 @@ import { convexTest } from "convex-test";
 import { afterEach, expect, test, vi } from "vitest";
 import { components, internal } from "./_generated/api.js";
 import schema from "./schema.js";
-import { atOrThrow, signWebhook } from "../../src/test-helpers.js";
+import {
+  atOrThrow,
+  createEventTimeFields,
+  drain,
+  expectZohoCpaasError,
+  signWebhook,
+} from "../../src/test-helpers.js";
 
 const modules = import.meta.glob("./**/*.ts");
 const fresh = () => {
@@ -60,7 +66,7 @@ test("example app sends in no-token test mode without fetching", async () => {
     textbody: "Body",
   });
   expect(ids).toHaveLength(1);
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(await t.query(internal.example.get, { messageId: atOrThrow(ids, 0) })).toMatchObject({
     status: "accepted",
     to: "alice@example.test",
@@ -73,14 +79,15 @@ test("missing credentials require explicit test mode", async () => {
   vi.stubEnv("ZOHO_CPAAS_TOKEN", undefined);
   vi.stubEnv("ZOHO_CPAAS_TEST_MODE", "false");
   const t = fresh();
-  await expect(
+  await expectZohoCpaasError(
     t.mutation(components.zohoCpaas.email.send, {
       from: { address: "sender@example.test" },
       to: [{ address: "alice@example.test" }],
       subject: "Hello",
       textbody: "Body",
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_NOT_CONFIGURED" } });
+    "ZOHO_CPAAS_NOT_CONFIGURED",
+  );
   const optedIn = await t.mutation(components.zohoCpaas.email.send, {
     from: { address: "sender@example.test" },
     to: [{ address: "alice@example.test" }],
@@ -100,14 +107,15 @@ test("malformed provider configuration fails before fetch with a structured erro
   const fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
   const t = fresh();
-  await expect(
+  await expectZohoCpaasError(
     t.mutation(components.zohoCpaas.email.send, {
       from: { address: "sender@example.test" },
       to: [{ address: "alice@example.test" }],
       subject: "Hello",
       textbody: "Body",
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_NOT_CONFIGURED" } });
+    "ZOHO_CPAAS_NOT_CONFIGURED",
+  );
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
@@ -136,7 +144,7 @@ test("example app sends through workpool and preserves provider request id", asy
     idempotencyKey: "send-1",
   });
   expect(same).toEqual(ids);
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cpaas.zoho.com/v1.1/email");
   expect(new Headers(fetchMock.mock.calls[0]?.[1].headers).get("Authorization")).toBe(
@@ -171,7 +179,7 @@ test("email sends preserve trimmed recipient casing while indexing rows in lower
     subject: "Hello",
     textbody: "Body",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(jsonRequestBody(fetchMock.mock.calls[0]?.[1])).toMatchObject({
     from: { address: "Sender@Example.test" },
     to: [{ email_address: { address: "Alice@Example.test" } }],
@@ -197,7 +205,7 @@ test("an odd 2xx response is accepted with a warning and is never retried", asyn
     subject: "Hello",
     textbody: "Body",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(
     await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 0) }),
@@ -224,13 +232,13 @@ test("email workpool retries are capped at five attempts and a definitive failur
     idempotencyKey: "retry-after-failure",
   };
   const first = await t.mutation(components.zohoCpaas.email.send, args);
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(1);
   const second = await t.mutation(components.zohoCpaas.email.send, args);
   expect(atOrThrow(second, 0)).not.toBe(atOrThrow(first, 0));
 
   fetchMock.mockImplementation(async () => new Response("failure", { status: 500 }));
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(6);
   expect(
     await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(second, 0) }),
@@ -259,7 +267,7 @@ test("an ambiguous email attempt keeps its idempotency key after a later rejecti
     idempotencyKey: "ambiguous-then-rejected",
   };
   const first = await t.mutation(components.zohoCpaas.email.send, args);
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(
     await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(first, 0) }),
@@ -286,7 +294,7 @@ test("SMS permits a configured India host even when the region env is unset", as
     to: "+919876543210",
     templateKey: "template",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(await t.query(components.zohoCpaas.messages.get, { messageId: id })).toMatchObject({
     status: "accepted",
@@ -313,13 +321,13 @@ test("the 500-recipient batch boundary includes cc and bcc", async () => {
     textbody: "Body",
   });
   expect(ids).toHaveLength(500);
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(1);
   const payload = jsonRequestBody(fetchMock.mock.calls[0]?.[1]);
   expect(payloadArray(payload, "to")).toHaveLength(498);
   expect(payloadArray(payload, "cc")).toHaveLength(1);
   expect(payloadArray(payload, "bcc")).toHaveLength(1);
-  await expect(
+  await expectZohoCpaasError(
     t.mutation(components.zohoCpaas.email.sendBatch, {
       from: { address: "sender@example.test" },
       to: Array.from({ length: 500 }, (_, i) => ({
@@ -329,7 +337,8 @@ test("the 500-recipient batch boundary includes cc and bcc", async () => {
       subject: "Hello",
       textbody: "Body",
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
+    "ZOHO_CPAAS_INVALID_ARGUMENT",
+  );
 });
 
 test("upload enforces Zoho's 15 MB boundary and classifies provider failures", async () => {
@@ -350,14 +359,15 @@ test("upload enforces Zoho's 15 MB boundary and classifies provider failures", a
       testMode: true,
     }),
   ).resolves.toMatch(/^test-file-/);
-  await expect(
+  await expectZohoCpaasError(
     t.action(components.zohoCpaas.files.upload, {
       name: "too-large.bin",
       mimeType: "application/octet-stream",
       content: new Uint8Array(15 * 1024 * 1024 + 1).buffer,
       testMode: true,
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
+    "ZOHO_CPAAS_INVALID_ARGUMENT",
+  );
 
   vi.stubEnv("ZOHO_CPAAS_EMAIL_TOKEN", "email-token");
   vi.stubGlobal(
@@ -366,13 +376,14 @@ test("upload enforces Zoho's 15 MB boundary and classifies provider failures", a
       async () => new Response(JSON.stringify({ error: { code: "TM_8001" } }), { status: 422 }),
     ),
   );
-  await expect(
+  await expectZohoCpaasError(
     t.action(components.zohoCpaas.files.upload, {
       name: "file.bin",
       mimeType: "application/octet-stream",
       content: new Uint8Array([1, 2, 3]).buffer,
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_PROVIDER_ERROR" } });
+    "ZOHO_CPAAS_PROVIDER_ERROR",
+  );
 });
 
 test("batch and template batch each make one request and keep one row per recipient", async () => {
@@ -414,7 +425,7 @@ test("batch and template batch each make one request and keep one row per recipi
   });
   expect(first).toHaveLength(4);
   expect(second).toHaveLength(4);
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(fetchMock.mock.calls.map((call) => call[0])).toEqual(
     expect.arrayContaining([
@@ -426,38 +437,72 @@ test("batch and template batch each make one request and keep one row per recipi
     fetchMock.mock.calls.find((call) => call[0].endsWith("/email/batch"))?.[1],
   );
   expect(payload).toMatchObject({
-    client_reference: "{{__onx_ref}}",
+    client_reference: atOrThrow(first, 0),
     to: [
-      {
-        merge_info: {
-          shared: "common",
-          name: "One",
-          overridden: "local",
-          __onx_ref: atOrThrow(first, 0),
-        },
-      },
-      {
-        merge_info: {
-          shared: "common",
-          name: "Two",
-          overridden: "shared",
-          __onx_ref: atOrThrow(first, 1),
-        },
-      },
+      { merge_info: { shared: "common", name: "One", overridden: "local" } },
+      { merge_info: { shared: "common", name: "Two", overridden: "shared" } },
     ],
   });
+  expect(payload).not.toHaveProperty("merge_info");
+  expect(JSON.stringify(payload)).not.toContain("__onx_ref");
   expect(payload).toMatchObject({
     cc: [{ email_address: { address: "copy@example.test" } }],
     bcc: [{ email_address: { address: "archive@example.test" } }],
   });
-  for (const recipient of ["copy@example.test", "archive@example.test"]) {
-    const rows = await t.query(components.zohoCpaas.messages.list, {
-      recipient,
-      channel: "email",
-      paginationOpts: { numItems: 2, cursor: null },
+  for (const messageId of first)
+    expect(await t.query(components.zohoCpaas.messages.get, { messageId })).toMatchObject({
+      clientReference: atOrThrow(first, 0),
     });
-    expect(rows.page[0]?.clientReference).not.toBe("{{__onx_ref}}");
-  }
+});
+
+test("a batch bounce with the documented nested request ID updates only the bounced recipient's row", async () => {
+  vi.useFakeTimers();
+  vi.stubEnv("ZOHO_CPAAS_TOKEN", "test-token");
+  vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "webhook-test-key");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify(acceptedEmail), { status: 200 })),
+  );
+  const t = fresh();
+  const ids = await t.mutation(components.zohoCpaas.email.sendBatch, {
+    from: { address: "sender@example.test" },
+    to: [
+      { emailAddress: { address: "one@example.test" } },
+      { emailAddress: { address: "two@example.test" } },
+    ],
+    subject: "Hello",
+    textbody: "Body",
+  });
+  await drain(t);
+  const body = JSON.stringify({
+    webhook_request_id: "batch-bounce",
+    event_name: ["hardbounce"],
+    event_message: [
+      {
+        email_info: {
+          client_reference: atOrThrow(ids, 0),
+          to: [{ email_address: { address: "two@example.test" } }],
+        },
+        event_data: [{ object: "bounce", details: [{ time: new Date().toISOString() }] }],
+        request_id: "request-1",
+      },
+    ],
+  });
+  const response = await t.fetch("/zoho-cpaas/webhook", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "producer-signature": await signWebhook(body, "webhook-test-key"),
+    },
+    body,
+  });
+  expect(response.status).toBe(200);
+  expect(
+    await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 0) }),
+  ).toMatchObject({ status: "accepted" });
+  expect(
+    await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 1) }),
+  ).toMatchObject({ status: "bounced" });
 });
 
 test("verified webhook dedupes, applies hard bounce, suppresses, and commits the app callback", async () => {
@@ -471,7 +516,7 @@ test("verified webhook dedupes, applies hard bounce, suppresses, and commits the
     subject: "Hello",
     textbody: "Body",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   const sent = await t.query(internal.example.get, { messageId: atOrThrow(ids, 0) });
   const body = JSON.stringify({
     webhook_request_id: "wh-1",
@@ -479,12 +524,11 @@ test("verified webhook dedupes, applies hard bounce, suppresses, and commits the
     event_name: ["hardbounce"],
     event_message: [
       {
-        occurred_at: Date.now(),
         email_info: {
           client_reference: atOrThrow(ids, 0),
           to: [{ email_address: { address: "bounce@example.test" } }],
         },
-        event_data: [{ object: "bounce" }],
+        event_data: [{ object: "bounce", details: [{ time: new Date().toISOString() }] }],
       },
     ],
   });
@@ -513,17 +557,16 @@ test("verified webhook dedupes, applies hard bounce, suppresses, and commits the
     body,
   });
   expect(second.status).toBe(200);
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(await t.run(async (ctx) => ctx.db.query("webhookEvents").take(10))).toHaveLength(1);
-  await expect(
+  await expectZohoCpaasError(
     t.mutation(internal.example.sendEmail, {
       to: "bounce@example.test",
       subject: "Blocked",
       textbody: "Body",
     }),
-  ).rejects.toMatchObject({
-    data: { code: "ZOHO_CPAAS_ALL_SUPPRESSED" },
-  });
+    "ZOHO_CPAAS_ALL_SUPPRESSED",
+  );
 });
 
 test("webhook fails closed for missing secret and tampering", async () => {
@@ -552,12 +595,13 @@ test("webhook fails closed for missing secret and tampering", async () => {
 
 test("suppression normalization errors have a stable public error code", async () => {
   const t = fresh();
-  await expect(
+  await expectZohoCpaasError(
     t.mutation(components.zohoCpaas.suppressions.remove, {
       channel: "email",
       address: "not-an-email",
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
+    "ZOHO_CPAAS_INVALID_ARGUMENT",
+  );
 });
 
 test("email retries 429 using Retry-After and stops after five attempts", async () => {
@@ -578,7 +622,7 @@ test("email retries 429 using Retry-After and stops after five attempts", async 
     subject: "Retry",
     textbody: "Body",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(5);
   for (let i = 1; i < times.length; i++)
     expect(atOrThrow(times, i) - atOrThrow(times, i - 1)).toBeGreaterThanOrEqual(2000);
@@ -606,7 +650,7 @@ test("WhatsApp network failure does not retry, while a known Zoho 503 rejection 
     templateKey: "template-1",
     idempotencyKey: "ambiguous-wa-timeout",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(await t.query(components.zohoCpaas.messages.get, { messageId: first })).toMatchObject({
     status: "unknown",
@@ -640,7 +684,7 @@ test("WhatsApp network failure does not retry, while a known Zoho 503 rejection 
     to: "+919876543211",
     templateKey: "template-1",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(await t.query(components.zohoCpaas.messages.get, { messageId: second })).toMatchObject({
     status: "accepted",
@@ -670,7 +714,7 @@ test("queued cancellation prevents fetch and does not cancel an uncanceled batch
   expect(
     await t.mutation(components.zohoCpaas.messages.cancel, { messageId: atOrThrow(ids, 0) }),
   ).toBe(true);
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(1);
   const payload = jsonRequestBody(fetchMock.mock.calls[0]?.[1]);
   expect(payload).toMatchObject({ to: [{ email_address: { address: "two@example.test" } }] });
@@ -680,30 +724,6 @@ test("queued cancellation prevents fetch and does not cancel an uncanceled batch
   expect(
     await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 1) }),
   ).toMatchObject({ status: "accepted" });
-});
-
-test("file upload uses multipart and returns cache key", async () => {
-  vi.stubEnv("ZOHO_CPAAS_EMAIL_TOKEN", "email-token");
-  const fetchMock = vi.fn(
-    async (_url: string, _init: RequestInit) =>
-      new Response(JSON.stringify({ data: { file_cache_key: "fc-123" } }), { status: 200 }),
-  );
-  vi.stubGlobal("fetch", fetchMock);
-  const t = fresh();
-  const result = await t.action(internal.example.upload, {
-    name: "note.txt",
-    mimeType: "text/plain",
-    content: new TextEncoder().encode("hello").buffer,
-  });
-  expect(result).toBe("fc-123");
-  expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cpaas.zoho.com/v1.1/files");
-  const body = fetchMock.mock.calls[0]?.[1].body;
-  expect(body).toBeInstanceOf(FormData);
-  if (!(body instanceof FormData)) throw new Error("Expected multipart request");
-  const file = body.get("file");
-  expect(file).toBeInstanceOf(File);
-  if (!(file instanceof File)) throw new Error("Expected uploaded file");
-  expect(file.name).toBe("note.txt");
 });
 
 test("idempotency key collision with changed payload is rejected", async () => {
@@ -747,7 +767,7 @@ test("idempotency digest ignores argument key order at every depth", async () =>
     from: { name: "Sender", address: "sender@example.test" },
   });
   expect(reordered).toEqual(first);
-  await expect(
+  await expectZohoCpaasError(
     t.mutation(components.zohoCpaas.email.send, {
       idempotencyKey: "reordered",
       mimeHeaders: { "X-B": "3", "X-A": "1" },
@@ -756,7 +776,8 @@ test("idempotency digest ignores argument key order at every depth", async () =>
       to: [{ name: "Order", address: "order@example.test" }],
       from: { name: "Sender", address: "sender@example.test" },
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_IDEMPOTENCY_CONFLICT" } });
+    "ZOHO_CPAAS_IDEMPOTENCY_CONFLICT",
+  );
 });
 
 test("suppressed rows are neutral when deciding whether a failed send can replay", async () => {
@@ -773,7 +794,7 @@ test("suppressed rows are neutral when deciding whether a failed send can replay
     event_name: ["hardbounce"],
     event_message: [
       {
-        occurred_at: Date.now(),
+        ...createEventTimeFields(Date.now()),
         email_info: { to: [{ email_address: { address: "blocked@example.test" } }] },
       },
     ],
@@ -792,7 +813,7 @@ test("suppressed rows are neutral when deciding whether a failed send can replay
     idempotencyKey: "suppressed-neutral",
   };
   const first = await t.mutation(components.zohoCpaas.email.send, args);
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(1);
   const statuses = await Promise.all(
     first.map(
@@ -834,7 +855,7 @@ test("batch completion preserves an earlier webhook outcome", async () => {
     event_name: ["hardbounce"],
     event_message: [
       {
-        occurred_at: Date.now(),
+        ...createEventTimeFields(Date.now()),
         email_info: { to: [{ email_address: { address: "two@example.test" } }] },
       },
     ],
@@ -849,7 +870,7 @@ test("batch completion preserves an earlier webhook outcome", async () => {
       })
     ).status,
   ).toBe(200);
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(
     await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 0) }),
   ).toMatchObject({ status: "accepted" });
@@ -875,7 +896,7 @@ test("explicit test mode with token records a template send without fetch", asyn
     templateAlias: "welcome",
     testMode: true,
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).not.toHaveBeenCalled();
   expect(
     await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 0) }),
@@ -914,7 +935,7 @@ test("single template uses its endpoint, and SMS uses India override and channel
     templateKey: "sms-template-1",
     mergeInfo: { otp: "123456" },
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock.mock.calls.map((call) => call[0])).toEqual(
     expect.arrayContaining([
       "https://api.zeptomail.in/v1.1/email/template",
@@ -940,7 +961,7 @@ test("single template uses its endpoint, and SMS uses India override and channel
   ).toMatchObject({ status: "accepted", zohoRequestId: "request-1" });
 });
 
-test("previous webhook secret accepts form data and WhatsApp read cannot regress to delivered or failed", async () => {
+test("previous webhook secret verifies form data and an undated WhatsApp body leaves the message unchanged", async () => {
   vi.useFakeTimers();
   vi.stubEnv("ZOHO_CPAAS_WHATSAPP_TOKEN", "wa-token");
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "new-secret");
@@ -964,43 +985,33 @@ test("previous webhook secret accepts form data and WhatsApp read cannot regress
     to: "+919876543210",
     templateAlias: "utility",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
-  for (const [name, eventId] of [
-    ["read", "wa-wh-1"],
-    ["delivered", "wa-wh-2"],
-    ["undelivered", "wa-wh-3"],
-  ] as const) {
-    const json = JSON.stringify({
-      webhook_request_id: eventId,
-      request_id: "wa-req-1",
-      event_name: [name],
-      event_message: [
-        { occurred_at: Date.now(), to: "+919876543210", message_id: "wa-1", client_reference: id },
-      ],
+  await drain(t);
+  const json = JSON.stringify({
+    webhook_request_id: "wa-wh-1",
+    event_name: ["read"],
+    event_message: [
+      { request_id: "wa-req-1", to: "+919876543210", message_id: "wa-1", client_reference: id },
+    ],
+  });
+  const post = async (secret: string) =>
+    t.fetch("/zoho-cpaas/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "producer-signature": await signWebhook(json, secret),
+      },
+      body: `data=${encodeURIComponent(json)}`,
     });
-    const body = `data=${encodeURIComponent(json)}`;
-    const signature = await signWebhook(json, "old-secret");
-    expect(
-      (
-        await t.fetch("/zoho-cpaas/webhook", {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-www-form-urlencoded",
-            "producer-signature": signature,
-          },
-          body,
-        })
-      ).status,
-    ).toBe(200);
-  }
+  expect((await post("unknown-secret")).status).toBe(401);
+  expect((await post("old-secret")).status).toBe(200);
   expect(await t.query(components.zohoCpaas.messages.get, { messageId: id })).toMatchObject({
-    status: "read",
+    status: "accepted",
   });
   const events = await t.query(components.zohoCpaas.messages.listEvents, {
     messageId: id,
     paginationOpts: { numItems: 10, cursor: null },
   });
-  expect(events.page).toHaveLength(3);
+  expect(events.page).toEqual([]);
 });
 
 test("all-suppressed sends return a branchable error and suppression removal permits a later send", async () => {
@@ -1013,7 +1024,7 @@ test("all-suppressed sends return a branchable error and suppression removal per
     event_name: ["hardbounce"],
     event_message: [
       {
-        occurred_at: Date.now(),
+        ...createEventTimeFields(Date.now()),
         email_info: { to: [{ email_address: { address: "blocked@example.test" } }] },
       },
     ],
@@ -1035,9 +1046,10 @@ test("all-suppressed sends return a branchable error and suppression removal per
     textbody: "Body",
     idempotencyKey: "fully-suppressed",
   };
-  await expect(t.mutation(components.zohoCpaas.email.send, args)).rejects.toMatchObject({
-    data: { code: "ZOHO_CPAAS_ALL_SUPPRESSED" },
-  });
+  await expectZohoCpaasError(
+    t.mutation(components.zohoCpaas.email.send, args),
+    "ZOHO_CPAAS_ALL_SUPPRESSED",
+  );
   expect(
     await t.mutation(components.zohoCpaas.suppressions.remove, {
       channel: "email",
@@ -1048,7 +1060,7 @@ test("all-suppressed sends return a branchable error and suppression removal per
     ...args,
     idempotencyKey: "after-remove",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(
     await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(allowed, 0) }),
   ).toMatchObject({ status: "accepted" });
@@ -1073,7 +1085,7 @@ test("single email tracks to, cc and bcc once with documented recipient shapes",
     textbody: "Body",
   });
   expect(ids).toHaveLength(3);
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(1);
   const payload = jsonRequestBody(fetchMock.mock.calls[0]?.[1]);
   expect(payload).toMatchObject({
@@ -1109,7 +1121,7 @@ test("synchronous permanent SMS recipient failure adds suppression", async () =>
     to: "+919876543210",
     templateKey: "template-1",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(await t.query(components.zohoCpaas.messages.get, { messageId: id })).toMatchObject({
     status: "failed",
   });
@@ -1134,7 +1146,7 @@ test("SMS timeout records unknown after one attempt", async () => {
     to: "+919876543210",
     templateKey: "template-1",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(await t.query(components.zohoCpaas.messages.get, { messageId: id })).toMatchObject({
     status: "unknown",
@@ -1163,7 +1175,7 @@ test("fetch abort timeouts retry email with a five-attempt cap but never retry S
     textbody: "Body",
     idempotencyKey: "ambiguous-email-timeout",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(5);
   expect(
     await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(emailIds, 0) }),
@@ -1188,7 +1200,7 @@ test("fetch abort timeouts retry email with a five-attempt cap but never retry S
     templateKey: "template",
     idempotencyKey: "ambiguous-sms-timeout",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(await t.query(components.zohoCpaas.messages.get, { messageId: smsId })).toMatchObject({
     status: "unknown",
@@ -1230,7 +1242,7 @@ test("canceling an uncertain retry stops future requests and preserves unknown",
     await t.mutation(components.zohoCpaas.messages.cancel, { messageId: atOrThrow(ids, 0) }),
   ).toBe(true);
   vi.runAllTimers();
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(
     await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 0) }),
@@ -1275,7 +1287,7 @@ test("account-state SMS errors and SMS_108 are terminal; email SMI_115 waits 24 
       templateKey: "template",
     });
     smsIds.push(id);
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await drain(t);
     const row = await t.query(components.zohoCpaas.messages.get, { messageId: id });
     expect(row).toMatchObject({ status: "failed", attempts: 1 });
     expect(row).toMatchObject({
@@ -1302,7 +1314,7 @@ test("account-state SMS errors and SMS_108 are terminal; email SMI_115 waits 24 
     subject: "Daily limit",
     textbody: "Body",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(5);
   const [beforeDailyRetry, afterDailyRetry] = timestamps.slice(-2);
   if (beforeDailyRetry === undefined || afterDailyRetry === undefined)
@@ -1326,7 +1338,7 @@ test("multi-recipient bounce stays unresolved without a unique reference", async
     event_name: ["hardbounce"],
     event_message: [
       {
-        occurred_at: Date.now(),
+        ...createEventTimeFields(Date.now()),
         email_info: {
           to: [
             { email_address: { address: "one@example.test" } },
@@ -1359,13 +1371,13 @@ test("multi-recipient bounce stays unresolved without a unique reference", async
     subject: "Hello",
     textbody: "Body",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   const referenced = JSON.stringify({
     webhook_request_id: "referenced-bounce",
     event_name: ["hardbounce"],
     event_message: [
       {
-        occurred_at: Date.now(),
+        ...createEventTimeFields(Date.now()),
         email_info: {
           client_reference: atOrThrow(ids, 0),
           to: [
@@ -1439,7 +1451,7 @@ test("suppressed final to with eligible cc rejects before recording or fetching"
     event_name: ["hardbounce"],
     event_message: [
       {
-        occurred_at: Date.now(),
+        ...createEventTimeFields(Date.now()),
         email_info: { to: [{ email_address: { address: "blocked@example.test" } }] },
       },
     ],
@@ -1465,7 +1477,7 @@ test("suppressed final to with eligible cc rejects before recording or fetching"
       textbody: "Body",
     }),
   ).rejects.toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   expect(fetchMock).not.toHaveBeenCalled();
   for (const recipient of ["blocked@example.test", "cc@example.test"]) {
     const rows = await t.query(components.zohoCpaas.messages.list, {
@@ -1495,7 +1507,7 @@ test("canceling final to locally fails cc without fetch in e2e and test mode", a
     expect(
       await t.mutation(components.zohoCpaas.messages.cancel, { messageId: atOrThrow(ids, 0) }),
     ).toBe(true);
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await drain(t);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(
       await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 0) }),

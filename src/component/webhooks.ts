@@ -11,13 +11,16 @@ import {
   maxWebhookBodyBytes,
   webhookReceiptRetentionMs,
   type NormalizedWebhookEvent,
+  type ParsedWebhookEvent,
 } from "../shared/webhook.js";
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { action, env, internalMutation, type MutationCtx } from "./_generated/server.js";
 import schema from "./schema.js";
-import { readConfig, resolveTestMode } from "./config.js";
+import { readConfig } from "../shared/config.js";
+import { readTestMode } from "./config.js";
 import { sha256Hex } from "../shared/crypto.js";
+import { boundedPage } from "../shared/bounds.js";
 
 const eventValidator = normalizedWebhookEventValidator;
 
@@ -129,7 +132,7 @@ async function addSuppression(
     .unique();
   if (!old)
     await ctx.db.insert("suppressions", {
-      testMode: message?.testMode ?? resolveTestMode(undefined),
+      testMode: message?.testMode ?? readTestMode(undefined),
       channel: "email",
       address,
       reason: event.type,
@@ -269,7 +272,7 @@ export const commit = internalMutation({
       .unique();
     if (sameBody) return { duplicate: true };
     await ctx.db.insert("webhookReceipts", {
-      testMode: resolveTestMode(undefined),
+      testMode: readTestMode(undefined),
       zohoEventId: args.zohoEventId,
       bodyHash: args.bodyHash,
       createdAt: Date.now(),
@@ -304,7 +307,7 @@ export const commit = internalMutation({
         ...(event.clientReference ? { clientReference: event.clientReference } : {}),
         ...(event.recipient ? { recipient: event.recipient } : {}),
         ambiguous,
-        testMode: message?.testMode ?? resolveTestMode(undefined),
+        testMode: message?.testMode ?? readTestMode(undefined),
       });
       if (message) {
         const updated = await applyEvent(ctx, event, message);
@@ -343,7 +346,7 @@ export async function reconcileRequestEvents(
   const page = await paginator(ctx.db, schema)
     .query("events")
     .withIndex("by_zohoRequestId_and_recipient", (q) => q.eq("zohoRequestId", requestId))
-    .paginate({ cursor, numItems: 100, maximumRowsRead: 100, maximumBytesRead: 512 * 1024 });
+    .paginate(boundedPage({ cursor, numItems: 100 }));
   const messages: Doc<"messages">[] = [];
   for (const id of messageIds) {
     const row = await ctx.db.get("messages", id);
@@ -387,7 +390,7 @@ export async function reconcileRequestEvents(
     await ctx.db.patch("events", stored._id, {
       messageId: message._id,
       ambiguous: false,
-      testMode: message.testMode || resolveTestMode(undefined),
+      testMode: message.testMode || readTestMode(undefined),
     });
     await applyEvent(ctx, event, message);
   }
@@ -423,6 +426,7 @@ export const receive = action({
       v.literal("missing_secret"),
       v.literal("oversized_body"),
       v.literal("invalid_payload"),
+      v.literal("stale_event"),
     ),
   }),
   handler: async (
@@ -436,7 +440,8 @@ export const receive = action({
       | "invalid_signature"
       | "missing_secret"
       | "oversized_body"
-      | "invalid_payload";
+      | "invalid_payload"
+      | "stale_event";
   }> => {
     if (new TextEncoder().encode(args.rawBody).byteLength > maxWebhookBodyBytes)
       return { duplicate: false, reason: "oversized_body" };
@@ -467,27 +472,33 @@ export const receive = action({
       !/^(application\/json|application\/x-www-form-urlencoded)(\s*;|\s*$)/i.test(args.contentType)
     )
       return invalidPayload();
-    const missingEventTimestamp = 0;
-    const parsed = parseWebhookBody(signed, missingEventTimestamp);
+    const parsed = parseWebhookBody(signed);
     if (!parsed) return invalidPayload();
     if (parsed.events.length === 0 || parsed.events.every((event) => event.channel === "unknown"))
       return invalidPayload();
     const now = Date.now();
-    const oldestEvent = now - webhookReceiptRetentionMs(config.retentionDays) + 86_400_000;
-    const latestEvent = now + 5 * 60 * 1000;
+    const oldestEventAt = now - webhookReceiptRetentionMs(config.retentionDays) + 86_400_000;
+    const latestEventAt = now + 5 * 60 * 1000;
+    const isFresh = (event: ParsedWebhookEvent): event is NormalizedWebhookEvent =>
+      event.occurredAt !== undefined &&
+      event.occurredAt >= oldestEventAt &&
+      event.occurredAt <= latestEventAt;
+    const events = parsed.events;
+    if (!events.every(isFresh)) {
+      const result = await ctx.runMutation(internal.webhooks.recordFailure, {
+        bodyHash,
+        reason: "stale_event",
+      });
+      return { duplicate: result.duplicate, reason: "stale_event" };
+    }
     if (
-      parsed.events.some(
-        (event) => event.occurredAt < oldestEvent || event.occurredAt > latestEvent,
-      )
-    )
-      return { duplicate: false, reason: "invalid_signature" };
-    if (
-      parsed.events.length > 500 ||
-      new TextEncoder().encode(JSON.stringify(parsed.events)).byteLength > 256 * 1024
+      events.length > 500 ||
+      new TextEncoder().encode(JSON.stringify(events)).byteLength > 256 * 1024
     )
       return invalidPayload();
     const result = await ctx.runMutation(internal.webhooks.commit, {
-      ...parsed,
+      zohoEventId: parsed.zohoEventId,
+      events,
       bodyHash,
       ...(args.callbackHandle ? { callbackHandle: args.callbackHandle } : {}),
     });
@@ -496,7 +507,10 @@ export const receive = action({
 });
 
 export const recordFailure = internalMutation({
-  args: { bodyHash: v.string(), reason: v.string() },
+  args: {
+    bodyHash: v.string(),
+    reason: v.union(v.literal("invalid_payload"), v.literal("stale_event")),
+  },
   returns: v.object({ duplicate: v.boolean() }),
   handler: async (ctx, args) => {
     const old = await ctx.db
@@ -507,7 +521,7 @@ export const recordFailure = internalMutation({
       .unique();
     if (old) return { duplicate: false };
     await ctx.db.insert("webhookReceipts", {
-      testMode: resolveTestMode(undefined),
+      testMode: readTestMode(undefined),
       zohoEventId: `invalid:${args.bodyHash}`,
       bodyHash: args.bodyHash,
       reason: args.reason,

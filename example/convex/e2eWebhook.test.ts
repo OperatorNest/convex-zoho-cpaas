@@ -3,7 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { internal } from "./_generated/api.js";
 import schema from "./schema.js";
 import { register } from "@operatornest/convex-zoho-cpaas/test";
-import { signWebhook } from "../../src/test-helpers.js";
+import { createEventTimeFields, signWebhook } from "../../src/test-helpers.js";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -22,7 +22,7 @@ test("e2e capture route is session gated and records signed delivery plus replay
     event_name: ["open"],
     event_message: [
       {
-        occurred_at: Date.now(),
+        ...createEventTimeFields(Date.now()),
         email_info: { to: [{ email_address: { address: "owner@example.test" } }] },
       },
     ],

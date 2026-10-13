@@ -6,7 +6,7 @@ import { convexTest } from "convex-test";
 import { afterEach, expect, test, vi } from "vitest";
 import { api } from "./_generated/api.js";
 import schema from "./schema.js";
-import { atOrThrow } from "../test-helpers.js";
+import { atOrThrow, expectZohoCpaasError } from "../test-helpers.js";
 
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
 
@@ -107,33 +107,38 @@ test("list requires one filter and supports status pagination", async () => {
     }),
   );
   const paginationOpts = { numItems: 10, cursor: null };
-  await expect(t.query(api.messages.list, { paginationOpts })).rejects.toMatchObject({
-    data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" },
-  });
-  await expect(
+  await expectZohoCpaasError(
+    t.query(api.messages.list, { paginationOpts }),
+    "ZOHO_CPAAS_INVALID_ARGUMENT",
+  );
+  await expectZohoCpaasError(
     t.query(api.messages.list, {
       recipient: "status@example.test",
       status: "accepted",
       paginationOpts,
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
-  await expect(
+    "ZOHO_CPAAS_INVALID_ARGUMENT",
+  );
+  await expectZohoCpaasError(
     t.query(api.messages.list, { recipient: "status@example.test", paginationOpts }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
-  await expect(
+    "ZOHO_CPAAS_INVALID_ARGUMENT",
+  );
+  await expectZohoCpaasError(
     t.query(api.messages.list, {
       channel: "email",
       status: "accepted",
       paginationOpts,
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
-  await expect(
+    "ZOHO_CPAAS_INVALID_ARGUMENT",
+  );
+  await expectZohoCpaasError(
     t.query(api.messages.list, {
       recipient: "invalid phone",
       channel: "sms",
       paginationOpts,
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
+    "ZOHO_CPAAS_INVALID_ARGUMENT",
+  );
   const page = await t.query(api.messages.list, { status: "accepted", paginationOpts });
   expect(page.page.map((row) => row._id)).toEqual([messageId]);
 });
@@ -241,17 +246,13 @@ test.each(["broken", "{}", "[{}]"])(
   "malformed cursor %s returns the fixed validation error",
   async (cursor) => {
     const t = createComponentTest();
-    await expect(
+    await expectZohoCpaasError(
       t.query(api.messages.list, {
         status: "accepted",
         paginationOpts: { numItems: 10, cursor },
       }),
-    ).rejects.toMatchObject({
-      data: {
-        code: "ZOHO_CPAAS_INVALID_ARGUMENT",
-        message: "An argument is invalid, missing or out of bounds.",
-      },
-    });
+      "ZOHO_CPAAS_INVALID_ARGUMENT",
+    );
   },
 );
 
@@ -266,7 +267,7 @@ test.each(["get", "listEvents", "cancel"])(
         : method === "cancel"
           ? t.mutation(api.messages.cancel, { messageId: args.messageId })
           : t.query(api.messages.listEvents, args);
-    await expect(result).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
+    await expectZohoCpaasError(result, "ZOHO_CPAAS_INVALID_ARGUMENT");
   },
 );
 
@@ -279,9 +280,7 @@ test.each([0, 101, 1.5])("all list APIs reject numItems=%s", async (numItems) =>
     t.query(api.messages.listEvents, { messageId: id, paginationOpts }),
     t.query(api.suppressions.list, { channel: "email", paginationOpts }),
   ])
-    await expect(operation).rejects.toMatchObject({
-      data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" },
-    });
+    await expectZohoCpaasError(operation, "ZOHO_CPAAS_INVALID_ARGUMENT");
 });
 
 test.each(["get", "listEvents", "cancel"])(
@@ -302,8 +301,6 @@ test.each(["get", "listEvents", "cancel"])(
               messageId,
               paginationOpts: { numItems: 10, cursor: null },
             });
-    await expect(result).rejects.toMatchObject({
-      data: { code: "ZOHO_CPAAS_NOT_FOUND", message: "The referenced row does not exist." },
-    });
+    await expectZohoCpaasError(result, "ZOHO_CPAAS_NOT_FOUND");
   },
 );

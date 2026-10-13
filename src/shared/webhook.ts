@@ -194,25 +194,34 @@ function hasWhatsappMarker(message: JSONObject, eventType: WebhookEventType): bo
   );
 }
 
-function occurredAt(message: JSONObject, nowMs: number): number {
-  const info = object(message.email_info);
-  const eventData = Array.isArray(message.event_data) ? object(message.event_data[0]) : null;
-  const detail = Array.isArray(eventData?.details) ? object(eventData.details[0]) : null;
-  const candidates = [message.occurred_at, message.timestamp, detail?.time, info?.processed_time];
-  for (const candidate of candidates) {
-    if (typeof candidate === "number" && Number.isFinite(candidate)) return candidate;
-    if (typeof candidate === "string") {
-      const parsed = Date.parse(candidate);
-      if (Number.isFinite(parsed)) return parsed;
-    }
-  }
-  return nowMs;
+function first(value: unknown): JSONObject | null {
+  return object(Array.isArray(value) ? value[0] : value);
 }
+
+// Epoch numbers below 1e12 are seconds: read as milliseconds they would predate September 2001.
+const SECONDS_EPOCH_LIMIT = 1e12;
+
+function epochMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0)
+    return value < SECONDS_EPOCH_LIMIT ? value * 1000 : value;
+  if (typeof value !== "string") return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function occurredAt(message: JSONObject): number | undefined {
+  const detail = first(first(message.event_data)?.details);
+  return epochMs(detail?.time) ?? epochMs(object(message.email_info)?.processed_time);
+}
+
+/** A parsed provider event whose `occurredAt` is absent when the body names no documented event time. */
+export type ParsedWebhookEvent = Omit<NormalizedWebhookEvent, "occurredAt"> & {
+  occurredAt: number | undefined;
+};
 
 export function parseWebhookBody(
   signedBody: string,
-  nowMs = Date.now(),
-): { zohoEventId: string; events: NormalizedWebhookEvent[] } | null {
+): { zohoEventId: string; events: ParsedWebhookEvent[] } | null {
   let value: unknown;
   try {
     value = JSON.parse((decodedBody(signedBody) ?? "").replace(/^\uFEFF/, "").trim());
@@ -226,7 +235,7 @@ export function parseWebhookBody(
   const messages = Array.isArray(payload.event_message)
     ? payload.event_message
     : [payload.event_message];
-  const events: NormalizedWebhookEvent[] = [];
+  const events: ParsedWebhookEvent[] = [];
   for (let index = 0; index < messages.length; index++) {
     const message = object(messages[index]);
     if (!message) continue;
@@ -251,7 +260,7 @@ export function parseWebhookBody(
         recipient = undefined;
       }
     }
-    const zohoRequestId = string(payload.request_id);
+    const zohoRequestId = string(message.request_id) ?? string(payload.request_id);
     const zohoMessageId = string(emailInfo?.email_reference) ?? string(message.message_id);
     const clientReference = string(emailInfo?.client_reference) ?? string(message.client_reference);
     events.push({
@@ -262,7 +271,7 @@ export function parseWebhookBody(
       ...(zohoRequestId ? { zohoRequestId } : {}),
       ...(zohoMessageId ? { zohoMessageId } : {}),
       ...(clientReference ? { clientReference } : {}),
-      occurredAt: occurredAt(message, nowMs),
+      occurredAt: occurredAt(message),
       raw: { event_name: names[index] ?? names[0], event_message: message },
     });
   }

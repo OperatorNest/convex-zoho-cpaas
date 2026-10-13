@@ -4,7 +4,7 @@ import { components } from "./_generated/api.js";
 import schema from "./schema.js";
 import { register } from "@operatornest/convex-zoho-cpaas/test";
 import { parseWebhookBody } from "../../src/shared/webhook.js";
-import { atOrThrow, signWebhook } from "../../src/test-helpers.js";
+import { atOrThrow, createEventTimeFields, drain, signWebhook } from "../../src/test-helpers.js";
 
 const modules = import.meta.glob("./**/*.ts");
 const fresh = () => {
@@ -17,7 +17,7 @@ function payload(eventId: string, name = "open", message: Record<string, unknown
   return JSON.stringify({
     webhook_request_id: eventId,
     event_name: [name],
-    event_message: [{ occurred_at: Date.now(), ...message }],
+    event_message: [{ ...createEventTimeFields(Date.now()), ...message }],
   });
 }
 
@@ -57,7 +57,7 @@ test("callback failure rolls back receipt and event, then provider redelivery co
     textbody: "Body",
   });
   const messageId = atOrThrow(sentIds, 0);
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   await t.run(async (ctx) => {
     await ctx.db.insert("webhookCallbackControl", { key: "webhook", fail: true });
   });
@@ -66,7 +66,7 @@ test("callback failure rolls back receipt and event, then provider redelivery co
     event_name: ["hardbounce"],
     event_message: [
       {
-        occurred_at: Date.now(),
+        ...createEventTimeFields(Date.now()),
         email_info: {
           client_reference: messageId,
           to: [{ email_address: { address: "callback@example.test" } }],
@@ -116,9 +116,15 @@ test("verified malformed, unsupported, and over-event-limit bodies get hashed fa
   const manyEvents = JSON.stringify({
     webhook_request_id: "too-many",
     event_name: Array(501).fill("open"),
-    event_message: Array.from({ length: 501 }, () => ({ occurred_at: Date.now(), email_info: {} })),
+    event_message: Array.from({ length: 501 }, () => ({
+      ...createEventTimeFields(Date.now()),
+      email_info: {},
+    })),
   });
-  const badContent = payload("bad-content", "open", { occurred_at: Date.now(), email_info: {} });
+  const badContent = payload("bad-content", "open", {
+    ...createEventTimeFields(Date.now()),
+    email_info: {},
+  });
   const invalidPayloads: Array<[string, string]> = [
     [missingId, "application/json"],
     [manyEvents, "application/json"],
@@ -185,11 +191,11 @@ test("arrays are recorded as separate events and signed form and JSON decoding p
     event_name: ["open", "click"],
     event_message: [
       {
-        occurred_at: Date.now(),
+        ...createEventTimeFields(Date.now()),
         email_info: { to: [{ email_address: { address: "a+b@example.test" } }] },
       },
       {
-        occurred_at: Date.now(),
+        ...createEventTimeFields(Date.now()),
         email_info: { to: [{ email_address: { address: "c@example.test" } }] },
       },
     ],
@@ -219,7 +225,7 @@ test("arrays are recorded as separate events and signed form and JSON decoding p
 test("BOM and leading whitespace JSON verifies; concurrent duplicate deliveries commit once", async () => {
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
   const t = fresh();
-  const body = `\uFEFF  ${payload("concurrent", "open", { occurred_at: Date.now(), email_info: {} })}`;
+  const body = `\uFEFF  ${payload("concurrent", "open", { ...createEventTimeFields(Date.now()), email_info: {} })}`;
   const signature = await signWebhook(body);
   const responses = await Promise.all(
     Array.from({ length: 8 }, () => post(t, body, { signature })),
@@ -239,7 +245,7 @@ test("open and click preserve message status while complaints suppress and mark 
     subject: "Hi",
     textbody: "Body",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   const message = await t.query(components.zohoCpaas.messages.get, {
     messageId: atOrThrow(id, 0),
   });
@@ -249,7 +255,7 @@ test("open and click preserve message status while complaints suppress and mark 
       event_name: [type],
       event_message: [
         {
-          occurred_at: Date.now(),
+          ...createEventTimeFields(Date.now()),
           email_info: {
             client_reference: atOrThrow(id, 0),
             to: [{ email_address: { address: "person@example.test" } }],
@@ -267,7 +273,7 @@ test("open and click preserve message status while complaints suppress and mark 
     event_name: ["complaint"],
     event_message: [
       {
-        occurred_at: Date.now(),
+        ...createEventTimeFields(Date.now()),
         email_info: {
           client_reference: atOrThrow(id, 0),
           to: [{ email_address: { address: "person@example.test" } }],
@@ -314,7 +320,7 @@ test("bounce received while the provider request is sending survives later accep
     event_name: ["hardbounce"],
     event_message: [
       {
-        occurred_at: Date.now(),
+        ...createEventTimeFields(Date.now()),
         email_info: {
           client_reference: messageId,
           to: [{ email_address: { address: "sending-bounce@example.test" } }],
@@ -355,7 +361,7 @@ test("an explicit recipient conflicting with the envelope never changes the enve
     subject: "Hi",
     textbody: "Body",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  await drain(t);
   const message = await t.query(components.zohoCpaas.messages.get, {
     messageId: atOrThrow(ids, 0),
   });
@@ -365,7 +371,7 @@ test("an explicit recipient conflicting with the envelope never changes the enve
     event_name: ["hardbounce"],
     event_message: [
       {
-        occurred_at: Date.now(),
+        ...createEventTimeFields(Date.now()),
         email_info: {
           to: [{ email_address: { address: "external@example.test" } }],
           cc: [{ email_address: { address: "primary@example.test" } }],
@@ -386,7 +392,7 @@ test("an explicit recipient conflicting with the envelope never changes the enve
   expect(suppressions.page.map((entry) => entry.address)).toContain("wrong@example.test");
 });
 
-test("unique client reference resolves a multi-recipient batch envelope", async () => {
+test("a multi-recipient batch envelope event stays unresolved and suppresses no address", async () => {
   vi.useFakeTimers();
   vi.stubEnv("ZOHO_CPAAS_TEST_MODE", "true");
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
@@ -398,58 +404,39 @@ test("unique client reference resolves a multi-recipient batch envelope", async 
       { emailAddress: { address: "batch-two@example.test" } },
     ],
     cc: [{ address: "batch-copy@example.test" }],
-    bcc: [{ address: "batch-archive@example.test" }],
     subject: "Batch identity",
     textbody: "Body",
   });
-  await t.finishAllScheduledFunctions(vi.runAllTimers);
-  const envelope = {
-    to: ["batch-one@example.test", "batch-two@example.test"].map((address) => ({
-      email_address: { address },
-    })),
-    cc: [{ email_address: { address: "batch-copy@example.test" } }],
-    bcc: [{ email_address: { address: "batch-archive@example.test" } }],
-  };
-  for (const [eventId, type, targetId] of [
-    ["batch-hardbounce", "hardbounce", atOrThrow(ids, 1)],
-    ["batch-complaint", "complaint", ids[2]],
-  ] as const) {
-    const body = JSON.stringify({
-      webhook_request_id: eventId,
-      event_name: [type],
-      event_message: [
-        {
-          occurred_at: Date.now(),
-          email_info: { ...envelope, client_reference: targetId },
+  await drain(t);
+  const sent = await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 0) });
+  const body = JSON.stringify({
+    webhook_request_id: "batch-envelope",
+    event_name: ["hardbounce"],
+    event_message: [
+      {
+        ...createEventTimeFields(Date.now()),
+        email_info: {
+          client_reference: sent?.clientReference,
+          to: ["batch-one@example.test", "batch-two@example.test"].map((address) => ({
+            email_address: { address },
+          })),
+          cc: [{ email_address: { address: "batch-copy@example.test" } }],
         },
-      ],
+        request_id: sent?.zohoRequestId,
+      },
+    ],
+  });
+  expect((await post(t, body)).status).toBe(200);
+  for (const messageId of ids)
+    expect(await t.query(components.zohoCpaas.messages.get, { messageId })).toMatchObject({
+      status: "accepted",
     });
-
-    expect((await post(t, body)).status).toBe(200);
-  }
   expect(
-    await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 1) }),
-  ).toMatchObject({
-    status: "bounced",
-  });
-  expect(
-    await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 2) }),
-  ).toMatchObject({
-    status: "complained",
-  });
-  expect(
-    await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 0) }),
-  ).toMatchObject({
-    status: "accepted",
-  });
-  const suppressions = await t.query(components.zohoCpaas.suppressions.list, {
-    channel: "email",
-    paginationOpts: { numItems: 10, cursor: null },
-  });
-  expect(suppressions.page.map((entry) => entry.address)).toEqual(
-    expect.arrayContaining(["batch-two@example.test", "batch-copy@example.test"]),
-  );
-  expect(suppressions.page.map((entry) => entry.address)).not.toContain("batch-one@example.test");
+    await t.query(components.zohoCpaas.suppressions.list, {
+      channel: "email",
+      paginationOpts: { numItems: 10, cursor: null },
+    }),
+  ).toMatchObject({ page: [] });
 });
 
 test("payload without email or WhatsApp markers is classified unknown and gets a failed receipt", async () => {
@@ -461,21 +448,21 @@ test("payload without email or WhatsApp markers is classified unknown and gets a
   expect(await t.run(async (ctx) => ctx.db.query("webhookEvents").take(10))).toHaveLength(0);
 });
 
-test("unmatched WhatsApp delivery remains a typed event for callback consumers", async () => {
+test("an undated WhatsApp delivery is acknowledged without reaching callback consumers", async () => {
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
   const t = fresh();
-  const body = payload("unmatched-wa", "delivered", {
-    to: "+919876543210",
-    message_id: "provider-message-1",
+  const body = JSON.stringify({
+    webhook_request_id: "undated-wa",
+    event_name: ["delivered"],
+    event_message: [{ to: "+919876543210", message_id: "provider-message-1" }],
   });
-  expect(parseWebhookBody(body)?.events[0]?.channel).toBe("whatsapp");
-  expect((await post(t, body)).status).toBe(200);
-  const callbackEvents = await t.run(async (ctx) => ctx.db.query("webhookEvents").take(10));
-  expect(callbackEvents[0]).toMatchObject({
-    type: "delivered",
+  expect(parseWebhookBody(body)?.events[0]).toMatchObject({
     channel: "whatsapp",
     recipient: "+919876543210",
+    occurredAt: undefined,
   });
+  expect((await post(t, body)).status).toBe(200);
+  expect(await t.run(async (ctx) => ctx.db.query("webhookEvents").take(10))).toEqual([]);
 });
 
 test("route rejects invalid length, oversized bodies, undecodable bytes, and unsigned requests", async () => {

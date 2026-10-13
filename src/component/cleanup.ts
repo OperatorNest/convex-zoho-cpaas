@@ -1,6 +1,6 @@
-import { readConfig } from "./config.js";
+import { readConfig } from "../shared/config.js";
 import { v } from "convex/values";
-import { createErrorData } from "../shared/error-data.js";
+import { zohoCpaasError } from "../shared/errors.js";
 import { webhookReceiptRetentionMs } from "../shared/webhook.js";
 import { env, internalMutation } from "./_generated/server.js";
 import { internal } from "./_generated/api.js";
@@ -35,7 +35,7 @@ export const run = internalMutation({
         status: "unknown",
         terminalAt: now,
         failureDefinitive: false,
-        error: createErrorData("ZOHO_CPAAS_STUCK"),
+        error: zohoCpaasError("ZOHO_CPAAS_NETWORK_ERROR", { retryable: false }).data,
       });
       if (message.jobId && !jobsToFinalize.includes(message.jobId))
         jobsToFinalize.push(message.jobId);

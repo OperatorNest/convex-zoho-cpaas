@@ -70,6 +70,7 @@ const safeReasons = new Set([
   "delivery_failure",
   "duplicate",
   "invalid_payload",
+  "stale_event",
   "missing_secret",
   "oversized_body",
   "undecodable_body",
