@@ -244,16 +244,26 @@ try {
   setEnv("ZOHO_CPAAS_WEBHOOK_SECRET", secret);
   await waitFor(() => {
     try {
-      const status = run("example:status");
+      const status = run("example:getConfig", {});
       return status.testMode === true && status.region === "in";
     } catch {
       return false;
     }
   }, "component India and test-mode configuration to reload");
 
+  const fileCacheKey = run("example:upload", {
+    name: "smoke.txt",
+    mimeType: "text/plain",
+    content: { $bytes: "c21va2U=" },
+  });
+  check(
+    "files.upload returns a simulated file-cache key",
+    typeof fileCacheKey === "string" && fileCacheKey.startsWith("test-file-"),
+  );
+
   const tag = `smoke${Date.now()}`;
   const addr = (name) => `${tag}-${name}@example.test`;
-  const messageStatus = (id) => run("example:getMessage", { messageId: id });
+  const messageStatus = (id) => run("example:get", { messageId: id });
   const waitStatus = (id, status) =>
     waitFor(() => {
       const m = messageStatus(id);
@@ -263,7 +273,7 @@ try {
   const [sentId] = run("example:sendEmail", {
     to: addr("bounce"),
     subject: "Smoke",
-    text: "Hello",
+    textbody: "Hello",
     idempotencyKey: `${tag}-key`,
   });
   const sent = await waitStatus(sentId, "accepted");
@@ -272,7 +282,7 @@ try {
   const replay = run("example:sendEmail", {
     to: addr("bounce"),
     subject: "Smoke",
-    text: "Hello",
+    textbody: "Hello",
     idempotencyKey: `${tag}-key`,
   });
   check("idempotent replay returns same ids", replay.length === 1 && replay[0] === sentId);
@@ -324,7 +334,7 @@ try {
           ],
         },
       ],
-      request_id: sent.providerRequestId,
+      request_id: sent.zohoRequestId,
       ...(reqId ? { webhook_request_id: reqId } : {}),
       ...extra,
     });
@@ -362,7 +372,7 @@ try {
   const afterSuppressed = runError("example:sendEmail", {
     to: addr("bounce"),
     subject: "Blocked",
-    text: "Body",
+    textbody: "Body",
   });
   check(
     "send to suppressed address is rejected as ZOHO_CPAAS_ALL_SUPPRESSED",
@@ -379,29 +389,30 @@ try {
   );
 
   const pageTo = addr("page");
-  for (const n of [1, 2, 3]) run("example:sendEmail", { to: pageTo, subject: `P${n}`, text: "x" });
+  for (const n of [1, 2, 3])
+    run("example:sendEmail", { to: pageTo, subject: `P${n}`, textbody: "x" });
   const page = (cursor) =>
-    run("example:listMessages", {
+    run("example:list", {
       recipient: pageTo,
       channel: "email",
       paginationOpts: { numItems: 2, cursor },
     });
   const page1 = page(null);
   const page2 = page(page1.continueCursor);
-  check("listMessages page 1 has 2 rows", page1.page.length === 2 && page1.isDone === false);
+  check("list page 1 has 2 rows", page1.page.length === 2 && page1.isDone === false);
   check(
-    "listMessages page 2 has the remaining row",
-    page2.page.length === 1 && !page1.page.some((m) => m.id === page2.page[0].id),
+    "list page 2 has the remaining row",
+    page2.page.length === 1 && !page1.page.some((m) => m.messageId === page2.page[0].messageId),
   );
-  const normalizedPage = run("example:listMessages", {
+  const normalizedPage = run("example:list", {
     recipient: pageTo.toUpperCase(),
     channel: "email",
     paginationOpts: { numItems: 2, cursor: null },
   });
   check(
-    "listMessages normalizes recipient before indexed lookup",
+    "list normalizes recipient before indexed lookup",
     normalizedPage.page.length === 2 &&
-      normalizedPage.page.every((row, index) => row.id === page1.page[index]?.id),
+      normalizedPage.page.every((row, index) => row.messageId === page1.page[index]?.messageId),
   );
   check(
     "removeSuppression removes the address",

@@ -33,7 +33,7 @@ test("every public client method forwards to its component function", async () =
     defaultFrom: { address: "sender@example.test" },
   });
 
-  expect(await t.query((ctx) => client.messages.status(ctx))).toMatchObject({
+  expect(await t.query((ctx) => client.messages.getConfig(ctx, {}))).toMatchObject({
     testMode: true,
     region: "in",
   });
@@ -41,7 +41,7 @@ test("every public client method forwards to its component function", async () =
     client.email.send(ctx, {
       to: [{ address: "Alice@Example.test" }],
       subject: "Hello",
-      text: "Body",
+      textbody: "Body",
     }),
   );
   const messageId = atOrThrow(sent, 0);
@@ -84,7 +84,7 @@ test("every public client method forwards to its component function", async () =
       client.email.sendBatch(ctx, {
         to: [{ emailAddress: { address: "batch@example.test" } }],
         subject: "Batch",
-        text: "Body",
+        textbody: "Body",
       }),
     ),
   ).toHaveLength(1);
@@ -99,7 +99,7 @@ test("every public client method forwards to its component function", async () =
   const bytes = new Uint8Array([1, 2, 3]).buffer;
   expect(
     await t.action((ctx) =>
-      client.email.uploadFile(ctx, {
+      client.files.upload(ctx, {
         name: "fixture.bin",
         mimeType: "application/octet-stream",
         content: bytes,
@@ -108,7 +108,7 @@ test("every public client method forwards to its component function", async () =
   ).toMatch(/^test-/);
   expect(
     await t.mutation((ctx) =>
-      client.experimental.sms.sendTemplate(ctx, {
+      client.sms.sendTemplate(ctx, {
         senderKey: "sender",
         to: "+919876543210",
         templateKey: "otp",
@@ -117,7 +117,7 @@ test("every public client method forwards to its component function", async () =
   ).toBeTruthy();
   expect(
     await t.mutation((ctx) =>
-      client.experimental.whatsapp.sendTemplate(ctx, {
+      client.whatsapp.sendTemplate(ctx, {
         from: "+14155550142",
         to: "+919876543210",
         templateKey: "otp",
@@ -160,13 +160,13 @@ test("client reports a structured error for a missing from address", async () =>
       client.email.send(ctx, {
         to: [{ address: "alice@example.test" }],
         subject: "Hello",
-        text: "Body",
+        textbody: "Body",
       }),
     );
     throw new Error("Expected missing from to fail");
   } catch (error) {
     expect(isZohoCpaasError(error)).toBe(true);
-    if (isZohoCpaasError(error)) expect(error.data.code).toBe("ZOHO_CPAAS_VALIDATION_FAILED");
+    if (isZohoCpaasError(error)) expect(error.data.code).toBe("ZOHO_CPAAS_INVALID_ARGUMENT");
   }
 });
 

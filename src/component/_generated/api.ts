@@ -11,12 +11,16 @@
 import type * as cleanup from "../cleanup.js";
 import type * as config from "../config.js";
 import type * as crons from "../crons.js";
+import type * as email from "../email.js";
+import type * as enqueue from "../enqueue.js";
 import type * as files from "../files.js";
 import type * as messages from "../messages.js";
 import type * as pool from "../pool.js";
 import type * as sends from "../sends.js";
+import type * as sms from "../sms.js";
 import type * as suppressions from "../suppressions.js";
 import type * as webhooks from "../webhooks.js";
+import type * as whatsapp from "../whatsapp.js";
 
 import type {
   ApiFromModules,
@@ -29,12 +33,16 @@ const fullApi: ApiFromModules<{
   cleanup: typeof cleanup;
   config: typeof config;
   crons: typeof crons;
+  email: typeof email;
+  enqueue: typeof enqueue;
   files: typeof files;
   messages: typeof messages;
   pool: typeof pool;
   sends: typeof sends;
+  sms: typeof sms;
   suppressions: typeof suppressions;
   webhooks: typeof webhooks;
+  whatsapp: typeof whatsapp;
 }> = anyApi as any;
 
 /**

@@ -1,13 +1,8 @@
 import { isRecord } from "../shared/record.js";
 import { v } from "convex/values";
-import {
-  errorData,
-  classifyNetworkError,
-  classifyProviderError,
-  isZohoCpaasError,
-  retryBackoffMs,
-  type ZohoCpaasMessageErrorCode,
-} from "../shared/errors.js";
+import { createErrorData } from "../shared/error-data.js";
+import { classifyNetworkError, classifyProviderError, retryBackoffMs } from "../shared/retry.js";
+import { isZohoCpaasError, type ZohoCpaasErrorCode } from "../shared/errors.js";
 import { normalizeEmail } from "../shared/provider.js";
 import { canTransitionStatus } from "../shared/status.js";
 import { reconcileRequestEvents } from "./webhooks.js";
@@ -22,8 +17,8 @@ import { providerBaseUrl, providerConfiguration } from "./config.js";
 const completionContext = v.object({ jobId: v.id("sendJobs"), attempt: v.number() });
 const outcomeValidator = v.object({
   kind: v.union(v.literal("skipped"), v.literal("accepted"), v.literal("failed")),
-  providerRequestId: v.optional(v.string()),
-  providerMessageId: v.optional(v.string()),
+  zohoRequestId: v.optional(v.string()),
+  zohoMessageId: v.optional(v.string()),
   warning: v.optional(v.string()),
   error: v.optional(errorValidator),
   retryable: v.optional(v.boolean()),
@@ -58,8 +53,8 @@ export const begin = internalMutation({
         ? providerBaseUrl(job.channel)
         : providerConfiguration(job.channel).baseUrl;
     } catch (error) {
-      configurationError = errorData(
-        isZohoCpaasError(error) ? error.data.code : "ZOHO_CPAAS_INVALID_CONFIG",
+      configurationError = createErrorData(
+        isZohoCpaasError(error) ? error.data.code : "ZOHO_CPAAS_NOT_CONFIGURED",
       );
     }
     const active: string[] = [];
@@ -206,7 +201,7 @@ export const execute = internalAction({
       if (!isRecord(parsed))
         return {
           kind: "failed",
-          error: errorData("ZOHO_CPAAS_VALIDATION_FAILED"),
+          error: createErrorData("ZOHO_CPAAS_INVALID_ARGUMENT"),
           failureDefinitive: true,
         };
       let payload = parsed;
@@ -214,14 +209,14 @@ export const execute = internalAction({
       if (job.channel === "email" && (!Array.isArray(payload.to) || payload.to.length === 0))
         return {
           kind: "failed",
-          error: errorData("ZOHO_CPAAS_VALIDATION_FAILED"),
+          error: createErrorData("ZOHO_CPAAS_INVALID_ARGUMENT"),
           failureDefinitive: true,
         };
       if (job.testMode)
         return {
           kind: "accepted",
-          providerRequestId: `test-${jobId}`,
-          ...(job.channel === "email" ? {} : { providerMessageId: `test-${jobId}` }),
+          zohoRequestId: `test-${jobId}`,
+          ...(job.channel === "email" ? {} : { zohoMessageId: `test-${jobId}` }),
         };
 
       const { authorization } = providerConfiguration(job.channel);
@@ -252,12 +247,12 @@ export const execute = internalAction({
         return ids.accepted
           ? {
               kind: "accepted",
-              ...(ids.requestId ? { providerRequestId: ids.requestId } : {}),
-              ...(ids.messageId ? { providerMessageId: ids.messageId } : {}),
+              ...(ids.requestId ? { zohoRequestId: ids.requestId } : {}),
+              ...(ids.messageId ? { zohoMessageId: ids.messageId } : {}),
             }
           : {
               kind: "accepted",
-              warning: "ZOHO_CPAAS_UNRECOGNIZED_SUCCESS_BODY" satisfies ZohoCpaasMessageErrorCode,
+              warning: "ZOHO_CPAAS_INVALID_RESPONSE" satisfies ZohoCpaasErrorCode,
             };
       }
       const classified = classifyProviderError(
@@ -267,7 +262,7 @@ export const execute = internalAction({
         Date.now(),
         job.channel,
       );
-      console.warn(classified.code ?? "ZOHO_CPAAS_PROVIDER_REJECTED");
+      console.warn(classified.code ?? "ZOHO_CPAAS_PROVIDER_ERROR");
       return {
         kind: "failed",
         explicitResponse: true,
@@ -275,7 +270,7 @@ export const execute = internalAction({
           (response.status < 500 && response.status !== 408) ||
           classified.accountState ||
           (response.status >= 500 && classified.explicitZohoCode === true),
-        error: errorData(classified.code, classified),
+        error: createErrorData(classified.code, classified),
         retryable: classified.retryable,
         ...(classified.retryAfterMs === undefined ? {} : { retryAfterMs: classified.retryAfterMs }),
         ...(job.channel === "sms" && !classified.retryable && recipientFailure(body)
@@ -287,21 +282,21 @@ export const execute = internalAction({
         return {
           kind: "failed",
           failureDefinitive: true,
-          error: errorData(
+          error: createErrorData(
             isZohoCpaasError(error) ? error.data.code : "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED",
           ),
         };
       if (response?.ok)
         return {
           kind: "accepted",
-          warning: "ZOHO_CPAAS_UNRECOGNIZED_SUCCESS_BODY" satisfies ZohoCpaasMessageErrorCode,
+          warning: "ZOHO_CPAAS_INVALID_RESPONSE" satisfies ZohoCpaasErrorCode,
         };
       const classified = classifyNetworkError(job.channel);
       console.warn(classified.code ?? "ZOHO_CPAAS_NETWORK_ERROR");
       return {
         kind: "failed",
         failureDefinitive: false,
-        error: errorData(classified.code),
+        error: createErrorData(classified.code, classified),
         retryable: classified.retryable,
       };
     } finally {
@@ -328,7 +323,7 @@ export const complete = pool.defineOnComplete<
           ? { kind: "skipped" }
           : {
               kind: "failed",
-              error: errorData("ZOHO_CPAAS_WORKPOOL_ACTION_FAILED"),
+              error: createErrorData("ZOHO_CPAAS_WORKPOOL_ACTION_FAILED"),
               retryable: job.channel === "email",
               failureDefinitive: false,
             };
@@ -410,11 +405,11 @@ export const complete = pool.defineOnComplete<
         ? { status: next }
         : {};
       const patch = {
-        ...((outcome.providerRequestId ?? row.providerRequestId)
-          ? { providerRequestId: outcome.providerRequestId ?? row.providerRequestId }
+        ...((outcome.zohoRequestId ?? row.zohoRequestId)
+          ? { zohoRequestId: outcome.zohoRequestId ?? row.zohoRequestId }
           : {}),
-        ...((outcome.providerMessageId ?? row.providerMessageId)
-          ? { providerMessageId: outcome.providerMessageId ?? row.providerMessageId }
+        ...((outcome.zohoMessageId ?? row.zohoMessageId)
+          ? { zohoMessageId: outcome.zohoMessageId ?? row.zohoMessageId }
           : {}),
         ...(outcome.warning ? { warning: outcome.warning } : {}),
         ...(failureDefinitive === undefined ? {} : { failureDefinitive }),
@@ -441,6 +436,7 @@ export const complete = pool.defineOnComplete<
           .unique();
         if (!old)
           await ctx.db.insert("suppressions", {
+            testMode: job.testMode,
             channel: "sms",
             address: row.to,
             reason: outcome.suppressionReason,
@@ -449,8 +445,8 @@ export const complete = pool.defineOnComplete<
           });
       }
     }
-    if (outcome.kind === "accepted" && outcome.providerRequestId)
-      await reconcileRequestEvents(ctx, outcome.providerRequestId, job.messageIds);
+    if (outcome.kind === "accepted" && outcome.zohoRequestId)
+      await reconcileRequestEvents(ctx, outcome.zohoRequestId, job.messageIds);
     await ctx.db.patch("sendJobs", job._id, { finishedAt: now, payload: "" });
   },
 });

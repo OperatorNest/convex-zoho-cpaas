@@ -1,11 +1,10 @@
 import workpool from "@convex-dev/workpool/convex.config.js";
 import { defineComponent } from "convex/server";
 import { v } from "convex/values";
-import { regionValidator } from "../shared/provider.js";
 
 const component = defineComponent("zohoCpaas", {
   env: {
-    ZOHO_CPAAS_REGION: v.optional(regionValidator),
+    ZOHO_CPAAS_REGION: v.optional(v.string()),
     ZOHO_CPAAS_BASE_URL: v.optional(v.string()),
     ZOHO_CPAAS_TOKEN: v.optional(v.string()),
     ZOHO_CPAAS_EMAIL_TOKEN: v.optional(v.string()),

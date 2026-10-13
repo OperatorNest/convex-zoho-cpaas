@@ -70,8 +70,8 @@ const emailCommon = {
 
 const emailBody = {
   subject: v.string(),
-  html: v.optional(v.string()),
-  text: v.optional(v.string()),
+  htmlbody: v.optional(v.string()),
+  textbody: v.optional(v.string()),
 };
 
 const emailTemplate = {
@@ -119,7 +119,7 @@ export const smsTemplateArgs = v.object({
 export const whatsappTemplateArgs = v.object({
   from: v.string(),
   to: v.string(),
-  agentId: v.optional(v.string()),
+  zohoAgentId: v.optional(v.string()),
   templateKey: v.optional(v.string()),
   templateAlias: v.optional(v.string()),
   mergeInfo: v.optional(v.record(v.string(), jsonLevelThree)),

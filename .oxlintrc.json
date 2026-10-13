@@ -19,7 +19,7 @@
     "no-underscore-dangle": [
       "error",
       {
-        "allow": ["_id", "_creationTime", "__onx_ref"]
+        "allow": ["_id", "_creationTime"]
       }
     ]
   },

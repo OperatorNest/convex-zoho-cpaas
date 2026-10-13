@@ -1,15 +1,16 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { vWorkId } from "@convex-dev/workpool";
-import { zohoCpaasErrorCodes } from "../shared/errors.js";
+import { ZOHO_CPAAS_ERROR_CODES } from "../shared/errors.js";
 import { channelValidator, statusValidator } from "../shared/validators.js";
 import { normalizedWebhookEventValidator } from "../shared/webhook.js";
 
 export const eventChannelValidator = normalizedWebhookEventValidator.fields.channel;
 export { channelValidator, statusValidator };
 export const errorValidator = v.object({
-  code: v.union(...zohoCpaasErrorCodes.map((code) => v.literal(code))),
+  code: v.union(...ZOHO_CPAAS_ERROR_CODES.map((code) => v.literal(code))),
   message: v.string(),
+  retryable: v.optional(v.boolean()),
   providerStatus: v.optional(v.number()),
   providerCode: v.optional(v.string()),
 });
@@ -21,14 +22,14 @@ export default defineSchema({
     from: v.string(),
     status: statusValidator,
     jobId: v.optional(v.id("sendJobs")),
-    providerMessageId: v.optional(v.string()),
-    providerRequestId: v.optional(v.string()),
+    zohoMessageId: v.optional(v.string()),
+    zohoRequestId: v.optional(v.string()),
     clientReference: v.string(),
     attempts: v.number(),
     failureDefinitive: v.optional(v.boolean()),
     error: v.optional(errorValidator),
     warning: v.optional(v.string()),
-    testMode: v.optional(v.boolean()),
+    testMode: v.boolean(),
     region: v.string(),
     createdAt: v.number(),
     sendingAt: v.optional(v.number()),
@@ -36,8 +37,8 @@ export default defineSchema({
     terminalAt: v.optional(v.number()),
     canceledAt: v.optional(v.number()),
   })
-    .index("by_providerRequestId_and_to", ["providerRequestId", "to"])
-    .index("by_providerMessageId", ["providerMessageId"])
+    .index("by_zohoRequestId_and_to", ["zohoRequestId", "to"])
+    .index("by_zohoMessageId", ["zohoMessageId"])
     .index("by_channel_and_clientReference_and_to", ["channel", "clientReference", "to"])
     .index("by_to_and_createdAt", ["to", "createdAt"])
     .index("by_status_and_createdAt", ["status", "createdAt"])
@@ -66,28 +67,30 @@ export default defineSchema({
     type: v.string(),
     occurredAt: v.number(),
     receivedAt: v.number(),
-    providerEventId: v.string(),
+    zohoEventId: v.string(),
     raw: v.string(),
-    providerRequestId: v.optional(v.string()),
-    providerMessageId: v.optional(v.string()),
+    zohoRequestId: v.optional(v.string()),
+    zohoMessageId: v.optional(v.string()),
     clientReference: v.optional(v.string()),
     recipient: v.optional(v.string()),
     ambiguous: v.optional(v.boolean()),
-    testMode: v.optional(v.boolean()),
+    testMode: v.boolean(),
   })
     .index("by_messageId_and_occurredAt", ["messageId", "occurredAt"])
     .index("by_receivedAt", ["receivedAt"])
-    .index("by_providerRequestId_and_recipient", ["providerRequestId", "recipient"]),
+    .index("by_zohoRequestId_and_recipient", ["zohoRequestId", "recipient"]),
   webhookReceipts: defineTable({
-    providerEventId: v.string(),
+    testMode: v.boolean(),
+    zohoEventId: v.string(),
     createdAt: v.number(),
     reason: v.optional(v.string()),
     bodyHash: v.string(),
   })
-    .index("by_providerEventId_and_reason", ["providerEventId", "reason"])
+    .index("by_zohoEventId_and_reason", ["zohoEventId", "reason"])
     .index("by_bodyHash_and_reason", ["bodyHash", "reason"])
     .index("by_createdAt", ["createdAt"]),
   suppressions: defineTable({
+    testMode: v.boolean(),
     channel: channelValidator,
     address: v.string(),
     reason: v.string(),

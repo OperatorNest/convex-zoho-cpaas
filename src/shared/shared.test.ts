@@ -3,13 +3,12 @@ import { ConvexError } from "convex/values";
 import { atOrThrow } from "../test-helpers.js";
 import {
   classifyNetworkError,
-  isZohoCpaasError,
-  zohoError,
   classifyProviderError,
   parseRetryAfter,
   retryBackoffMs,
   zohoCpaasProviderErrorCodes,
-} from "./errors.js";
+} from "./retry.js";
+import { isZohoCpaasError, zohoCpaasError } from "./errors.js";
 import { stableStringify } from "./record.js";
 import {
   buildEmailPayload,
@@ -74,14 +73,14 @@ describe("webhook trust boundary", () => {
     expect(signed).not.toBeNull();
     if (signed === null) throw new Error("Expected signed payload");
     expect(parseWebhookBody(signed)).toMatchObject({
-      providerEventId: "wh-demo-0001",
+      zohoEventId: "wh-demo-0001",
       events: [
         {
           type: "hardbounce",
           channel: "email",
           recipient: "rudra.d@zylker.com",
-          providerRequestId: "2d6f.14350939.i1.demo",
-          providerMessageId: "ref-demo-0001",
+          zohoRequestId: "2d6f.14350939.i1.demo",
+          zohoMessageId: "ref-demo-0001",
           clientReference: "order-12345",
         },
       ],
@@ -215,11 +214,11 @@ describe("provider request shapes and limits", () => {
       validateUploadFile("a".repeat(150), "application/octet-stream", 15 * 1024 * 1024),
     ).not.toThrow();
     expect(() => validateUploadFile("a".repeat(151), "application/octet-stream", 1)).toThrow(
-      /ZOHO_CPAAS_VALIDATION_FAILED/,
+      /ZOHO_CPAAS_INVALID_ARGUMENT/,
     );
     expect(() =>
       validateUploadFile("file.bin", "application/octet-stream", 15 * 1024 * 1024 + 1),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
   });
   test("uses documented nested recipient fields but flat reply_to", () => {
     expect(
@@ -227,7 +226,7 @@ describe("provider request shapes and limits", () => {
         {
           from: { address: " Sender@Example.com " },
           subject: "Welcome",
-          html: "<b>Hello</b>",
+          htmlbody: "<b>Hello</b>",
           cc: [{ address: "cc@example.com" }],
           bcc: [{ address: "bcc@example.com" }],
           replyTo: [{ address: "reply@example.com" }],
@@ -279,42 +278,42 @@ describe("provider request shapes and limits", () => {
   });
 
   test("rejects excessive recipient count and malformed inline media", () => {
-    const input = { from: { address: "from@example.com" }, subject: "Hi", text: "Hi" };
+    const input = { from: { address: "from@example.com" }, subject: "Hi", textbody: "Hi" };
     expect(() =>
       buildEmailPayload(
         input,
         Array.from({ length: 501 }, (_, i) => ({ address: `a${i}@example.com` })),
         "id",
       ),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
     expect(() =>
       buildEmailPayload(
         { ...input, attachments: [{ name: "a", content: "no?", mimeType: "text/plain" }] },
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
     expect(() =>
       buildEmailPayload(
         { ...input, attachments: [{ name: "a", content: "abcde", mimeType: "text/plain" }] },
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
     expect(() =>
       buildEmailPayload(
         { ...input, attachments: [{ name: "a", content: " \n\t ", mimeType: "text/plain" }] },
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
     expect(() =>
       buildEmailPayload(
         { ...input, replyTo: [{ address: "same@example.com" }, { address: "SAME@example.com" }] },
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
     expect(() =>
       buildEmailPayload(
         {
@@ -324,7 +323,7 @@ describe("provider request shapes and limits", () => {
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
     expect(() =>
       buildEmailPayload(
         {
@@ -338,10 +337,10 @@ describe("provider request shapes and limits", () => {
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
     expect(
       buildEmailPayload(
-        { ...input, text: "a".repeat(250_000) },
+        { ...input, textbody: "a".repeat(250_000) },
         [{ address: "to@example.com" }],
         "id",
       ).textbody,
@@ -377,7 +376,7 @@ describe("provider request shapes and limits", () => {
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
     expect(() =>
       buildEmailPayload(
         {
@@ -393,7 +392,7 @@ describe("provider request shapes and limits", () => {
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
     expect(
       buildEmailPayload(
         { ...input, attachments: [{ name: "a".repeat(150), fileCacheKey: "cache" }] },
@@ -407,14 +406,14 @@ describe("provider request shapes and limits", () => {
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
     expect(() =>
       buildEmailPayload(
         { ...input, subject: "s".repeat(501) },
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
     expect(
       buildEmailPayload(
         {
@@ -451,7 +450,7 @@ describe("provider request shapes and limits", () => {
     });
     expect(
       buildWhatsappPayload(
-        { from: "+14155550142", to: "919876543210", templateAlias: "otp", agentId: "agent" },
+        { from: "+14155550142", to: "919876543210", templateAlias: "otp", zohoAgentId: "agent" },
         "id",
       ),
     ).toEqual({
@@ -463,7 +462,7 @@ describe("provider request shapes and limits", () => {
     });
     expect(() =>
       buildSmsPayload({ senderKey: "sender", to: "+14155550142", templateKey: "key" }, "id"),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
     expect(
       buildSmsPayload(
         {
@@ -485,7 +484,7 @@ describe("provider request shapes and limits", () => {
         },
         "id",
       ),
-    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
+    ).toThrow(/ZOHO_CPAAS_INVALID_ARGUMENT/);
   });
 
   test("maps regions and token prefix", () => {
@@ -634,33 +633,41 @@ test("every documented provider error code survives classification verbatim", ()
 });
 
 test("the exported error guard rejects malformed provider metadata and missing messages", () => {
-  const code = "ZOHO_CPAAS_PROVIDER_REJECTED";
-  expect(isZohoCpaasError(zohoError(code, { providerStatus: 429, providerCode: "TM_3601" }))).toBe(
-    true,
-  );
+  const code = "ZOHO_CPAAS_PROVIDER_ERROR";
+  expect(
+    isZohoCpaasError(zohoCpaasError(code, { providerStatus: 429, providerCode: "TM_3601" })),
+  ).toBe(true);
   for (const data of [
     null,
     code,
     { code },
     { code: "UNRECOGNIZED", message: "Message" },
     { code, message: 4 },
-    { code, message: "Message", providerStatus: "429" },
-    { code, message: "Message", providerStatus: 99 },
-    { code, message: "Message", providerStatus: 600 },
-    { code, message: "Message", providerStatus: 429.5 },
-    { code, message: "Message", providerCode: "A".repeat(65) },
-    { code, message: "Message", providerCode: 4 },
+    { code, message: "Wrong message." },
+    { code, message: "The provider rejected the request.", retryable: "true" },
+    {
+      code: "ZOHO_CPAAS_INVALID_ARGUMENT",
+      message: "An argument is invalid, missing or out of bounds.",
+      retryable: true,
+    },
+    { code, message: "The provider rejected the request.", providerStatus: "429" },
+    { code, message: "The provider rejected the request.", providerStatus: 99 },
+    { code, message: "The provider rejected the request.", providerStatus: 600 },
+    { code, message: "The provider rejected the request.", providerStatus: 429.5 },
+    { code, message: "The provider rejected the request.", providerCode: "A".repeat(65) },
+    { code, message: "The provider rejected the request.", providerCode: 4 },
   ])
     expect(isZohoCpaasError(new ConvexError(data))).toBe(false);
   expect(isZohoCpaasError(new Error("Internal diagnostic"))).toBe(false);
   const classified = classifyProviderError(400, {
     error: { code: "TM_4001", message: "private description", details: [{ recipient: "private" }] },
   });
-  expect(zohoError(classified.code, classified).data).toEqual({
+  expect(zohoCpaasError(classified.code, classified).data).toEqual({
     code,
     message: "The provider rejected the request.",
     providerStatus: 400,
     providerCode: "TM_4001",
+    retryable: false,
   });
   expect(
     classifyProviderError(400, { error: { code: "A".repeat(65) } }).providerCode,

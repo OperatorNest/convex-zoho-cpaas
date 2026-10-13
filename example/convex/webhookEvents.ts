@@ -17,7 +17,7 @@ export const record = internalMutation({
     if (control?.fail)
       throw new ConvexError({ code: "ZOHO_CPAAS_CALLBACK_FAILED", message: "Retry webhook" });
     await ctx.db.insert("webhookEvents", {
-      providerEventId: event.providerEventId,
+      zohoEventId: event.zohoEventId,
       type: event.type,
       ...(event.recipient ? { recipient: event.recipient } : {}),
       occurredAt: event.occurredAt,

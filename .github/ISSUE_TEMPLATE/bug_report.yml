@@ -6,7 +6,7 @@ body:
     id: package_version
     attributes:
       label: Package version
-      placeholder: Package version or unreleased commit SHA
+      placeholder: 0.3.0, or an unreleased commit SHA
     validations:
       required: true
   - type: input
@@ -28,27 +28,32 @@ body:
       options: [Convex cloud, Self-hosted, Local backend]
     validations:
       required: true
-  - type: dropdown
-    id: zoho_region
+  - type: input
+    id: browser_version
     attributes:
-      label: Zoho CPaaS region
-      description: Select the affected region.
-      options: [US, EU, IN, AU, JP, CN, Not applicable]
+      label: Browser and version
+      description: Include when relevant.
     validations:
       required: false
-  - type: dropdown
-    id: zoho_channel
+  - type: input
+    id: operating_system
     attributes:
-      label: Channel
-      description: Select the affected channel.
-      options: [Email, SMS, WhatsApp, Not applicable]
+      label: Operating system and version
+      description: Include when relevant.
     validations:
       required: false
+  - type: input
+    id: operation
+    attributes:
+      label: Client method or component operation
+      description: Include the method and argument names; redact values.
+    validations:
+      required: true
   - type: textarea
     id: reproduction
     attributes:
       label: Minimal reproduction
-      description: Provide code or steps without credentials or personal data.
+      description: Include the smallest code or steps that reproduce the issue. Redact sensitive data.
     validations:
       required: true
   - type: textarea
@@ -67,6 +72,13 @@ body:
     id: logs
     attributes:
       label: Optional logs
-      description: Do not include credentials, API or webhook tokens, recipient addresses, message contents, phone numbers, or other personal data.
+      description: Do not include credentials, keys, tokens, endpoints, plaintext values, lookup hashes, payloads, customer data or personal information.
     validations:
       required: false
+  - type: checkboxes
+    id: issue_search
+    attributes:
+      label: Existing reports
+      options:
+        - label: I searched existing issues and discussions.
+          required: true

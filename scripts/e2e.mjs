@@ -256,7 +256,7 @@ function stringMap(values, name) {
 
 async function acceptedMessage(id) {
   return waitFor(() => {
-    const row = run("example:getMessage", { messageId: id });
+    const row = run("example:get", { messageId: id });
     if (row?.status === "failed") throw new Error("Provider send failed");
     return ["accepted", "delivered", "read", "bounced"].includes(row?.status) ? row : null;
   }, "provider send acceptance");
@@ -297,7 +297,7 @@ function decodePayload(rawBody) {
   }
 }
 
-function receiptsFor(providerEventId) {
+function receiptsFor(zohoEventId) {
   const rows = JSON.parse(
     command([
       "exec",
@@ -312,7 +312,7 @@ function receiptsFor(providerEventId) {
       "1000",
     ]),
   );
-  return rows.filter((row) => row.providerEventId === providerEventId && !row.reason);
+  return rows.filter((row) => row.zohoEventId === zohoEventId && !row.reason);
 }
 
 function eventName(payload) {
@@ -461,7 +461,7 @@ async function collectAttempts(
 
   for (const { attempt, eventId, name, observations } of originals) {
     assertActive();
-    const callbacks = run("example:e2eCallbacksFor", { providerEventId: eventId });
+    const callbacks = run("example:e2eCallbacksFor", { zohoEventId: eventId });
     const receipt = receiptsFor(eventId);
     const expectedType = mappedType(name);
     const payload = decodePayload(attempt.rawBody);
@@ -485,7 +485,7 @@ async function collectAttempts(
     if (!verified) continue;
     if (callbacks.some((row) => row.type === "hardbounce" && bounceIds.has(row.messageId))) {
       const bounced = [...bounceIds].some(
-        (id) => run("example:getMessage", { messageId: id })?.status === "bounced",
+        (id) => run("example:get", { messageId: id })?.status === "bounced",
       );
       const suppressions = run("example:listSuppressions", {
         paginationOpts: { numItems: 100, cursor: null },
@@ -523,7 +523,7 @@ async function collectAttempts(
         eventOrdinal: ordinal,
       });
       run("e2eWebhook:clear", { sessionId, ids: [duplicate._id] });
-      const after = run("example:e2eCallbacksFor", { providerEventId: eventId }).length;
+      const after = run("example:e2eCallbacksFor", { zohoEventId: eventId }).length;
       replayPassed =
         replay.status === 200 &&
         duplicate.duplicate &&
@@ -612,7 +612,7 @@ async function performE2e(values, options) {
     loadE2eEnv(values, { replace: true });
     assertActive();
     await waitFor(() => {
-      const status = run("example:status");
+      const status = run("example:getConfig");
       return status.configured && status.testMode === false && status.region === report.region;
     }, "e2e deployment configuration");
     check("local component configured in e2e mode", true);
@@ -669,19 +669,19 @@ async function performE2e(values, options) {
     let fileKey;
     try {
       assertActive();
-      fileKey = run("example:uploadFile", {
+      fileKey = run("example:upload", {
         name: "verification.txt",
         mimeType: "text/plain",
         content: { $bytes: Buffer.from("OperatorNest e2e verification\n").toString("base64") },
       });
       check(
-        "email.uploadFile returned file_cache_key",
+        "files.upload returned file_cache_key",
         typeof fileKey === "string" && fileKey.length > 0,
       );
       report.fileUploaded = typeof fileKey === "string" && fileKey.length > 0;
     } catch (error) {
       if (cancelRequested) throw error;
-      check("email.uploadFile returned file_cache_key", false);
+      check("files.upload returned file_cache_key", false);
     }
     if (fileKey) {
       const ids = await sendOperation(

@@ -41,8 +41,7 @@ type Env = {
   readonly CONVEX_SITE_URL: string;
   readonly ZOHO_CPAAS_BASE_URL: string | undefined;
   readonly ZOHO_CPAAS_EMAIL_TOKEN: string | undefined;
-  readonly ZOHO_CPAAS_REGION:
-    "us" | "eu" | "in" | "au" | "jp" | "cn" | undefined;
+  readonly ZOHO_CPAAS_REGION: string | undefined;
   readonly ZOHO_CPAAS_RETENTION_DAYS: string | undefined;
   readonly ZOHO_CPAAS_SMS_TOKEN: string | undefined;
   readonly ZOHO_CPAAS_TEST_MODE: string | undefined;

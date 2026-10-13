@@ -50,11 +50,11 @@ test("callback failure rolls back receipt and event, then provider redelivery co
   vi.stubEnv("ZOHO_CPAAS_TEST_MODE", "true");
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
   const t = fresh();
-  const sentIds = await t.mutation(components.zohoCpaas.messages.send, {
+  const sentIds = await t.mutation(components.zohoCpaas.email.send, {
     from: { address: "sender@example.test" },
     to: [{ address: "callback@example.test" }],
     subject: "Callback retry",
-    text: "Body",
+    textbody: "Body",
   });
   const messageId = atOrThrow(sentIds, 0);
   await t.finishAllScheduledFunctions(vi.runAllTimers);
@@ -76,7 +76,7 @@ test("callback failure rolls back receipt and event, then provider redelivery co
   });
   expect((await post(t, body)).status).toBe(500);
   expect(await t.run(async (ctx) => ctx.db.query("webhookEvents").take(10))).toHaveLength(0);
-  expect(await t.query(components.zohoCpaas.messages.getMessage, { messageId })).toMatchObject({
+  expect(await t.query(components.zohoCpaas.messages.get, { messageId })).toMatchObject({
     status: "accepted",
   });
   expect(
@@ -96,7 +96,7 @@ test("callback failure rolls back receipt and event, then provider redelivery co
   });
   expect((await post(t, body)).status).toBe(200);
   expect(await t.run(async (ctx) => ctx.db.query("webhookEvents").take(10))).toHaveLength(1);
-  expect(await t.query(components.zohoCpaas.messages.getMessage, { messageId })).toMatchObject({
+  expect(await t.query(components.zohoCpaas.messages.get, { messageId })).toMatchObject({
     status: "bounced",
   });
   expect(
@@ -233,14 +233,14 @@ test("open and click preserve message status while complaints suppress and mark 
   vi.stubEnv("ZOHO_CPAAS_TEST_MODE", "true");
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
   const t = fresh();
-  const id = await t.mutation(components.zohoCpaas.messages.send, {
+  const id = await t.mutation(components.zohoCpaas.email.send, {
     from: { address: "sender@example.test" },
     to: [{ address: "person@example.test" }],
     subject: "Hi",
-    text: "Body",
+    textbody: "Body",
   });
   await t.finishAllScheduledFunctions(vi.runAllTimers);
-  const message = await t.query(components.zohoCpaas.messages.getMessage, {
+  const message = await t.query(components.zohoCpaas.messages.get, {
     messageId: atOrThrow(id, 0),
   });
   for (const type of ["open", "click"]) {
@@ -260,7 +260,7 @@ test("open and click preserve message status while complaints suppress and mark 
     expect((await post(t, body)).status).toBe(200);
   }
   expect(
-    await t.query(components.zohoCpaas.messages.getMessage, { messageId: atOrThrow(id, 0) }),
+    await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(id, 0) }),
   ).toMatchObject({ status: message?.status });
   const complaint = JSON.stringify({
     webhook_request_id: "event-complaint",
@@ -277,13 +277,13 @@ test("open and click preserve message status while complaints suppress and mark 
   });
   expect((await post(t, complaint)).status).toBe(200);
   expect(
-    await t.query(components.zohoCpaas.messages.getMessage, { messageId: atOrThrow(id, 0) }),
+    await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(id, 0) }),
   ).toMatchObject({ status: "complained", testMode: true });
   const events = await t.query(components.zohoCpaas.messages.listEvents, {
     messageId: atOrThrow(id, 0),
     paginationOpts: { numItems: 10, cursor: null },
   });
-  expect(events.page.every((event) => event.testMode === true)).toBe(true);
+  expect(events.page.every((event) => event.testMode)).toBe(true);
 });
 
 test("bounce received while the provider request is sending survives later accepted completion", async () => {
@@ -297,16 +297,16 @@ test("bounce received while the provider request is sending survives later accep
   const fetchMock = vi.fn(() => providerResponse);
   vi.stubGlobal("fetch", fetchMock);
   const t = fresh();
-  const sentIds = await t.mutation(components.zohoCpaas.messages.send, {
+  const sentIds = await t.mutation(components.zohoCpaas.email.send, {
     from: { address: "sender@example.test" },
     to: [{ address: "sending-bounce@example.test" }],
     subject: "In flight",
-    text: "Body",
+    textbody: "Body",
   });
   const messageId = atOrThrow(sentIds, 0);
   const completing = t.finishAllScheduledFunctions(vi.runAllTimers);
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-  expect(await t.query(components.zohoCpaas.messages.getMessage, { messageId })).toMatchObject({
+  expect(await t.query(components.zohoCpaas.messages.get, { messageId })).toMatchObject({
     status: "sending",
   });
   const body = JSON.stringify({
@@ -323,7 +323,7 @@ test("bounce received while the provider request is sending survives later accep
     ],
   });
   expect((await post(t, body)).status).toBe(200);
-  expect(await t.query(components.zohoCpaas.messages.getMessage, { messageId })).toMatchObject({
+  expect(await t.query(components.zohoCpaas.messages.get, { messageId })).toMatchObject({
     status: "bounced",
   });
   if (resolveProvider === undefined) throw new Error("Provider request was not started");
@@ -337,9 +337,9 @@ test("bounce received while the provider request is sending survives later accep
     ),
   );
   await completing;
-  expect(await t.query(components.zohoCpaas.messages.getMessage, { messageId })).toMatchObject({
+  expect(await t.query(components.zohoCpaas.messages.get, { messageId })).toMatchObject({
     status: "bounced",
-    providerRequestId: "request-in-flight",
+    zohoRequestId: "request-in-flight",
   });
 });
 
@@ -348,20 +348,20 @@ test("an explicit recipient conflicting with the envelope never changes the enve
   vi.stubEnv("ZOHO_CPAAS_TEST_MODE", "true");
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
   const t = fresh();
-  const ids = await t.mutation(components.zohoCpaas.messages.send, {
+  const ids = await t.mutation(components.zohoCpaas.email.send, {
     from: { address: "sender@example.test" },
     to: [{ address: "primary@example.test" }],
     cc: [{ address: "copy@example.test" }],
     subject: "Hi",
-    text: "Body",
+    textbody: "Body",
   });
   await t.finishAllScheduledFunctions(vi.runAllTimers);
-  const message = await t.query(components.zohoCpaas.messages.getMessage, {
+  const message = await t.query(components.zohoCpaas.messages.get, {
     messageId: atOrThrow(ids, 0),
   });
   const body = JSON.stringify({
     webhook_request_id: "cc-bounce",
-    request_id: message?.providerRequestId,
+    request_id: message?.zohoRequestId,
     event_name: ["hardbounce"],
     event_message: [
       {
@@ -376,7 +376,7 @@ test("an explicit recipient conflicting with the envelope never changes the enve
   });
   expect((await post(t, body)).status).toBe(200);
   expect(
-    await t.query(components.zohoCpaas.messages.getMessage, { messageId: atOrThrow(ids, 0) }),
+    await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 0) }),
   ).toMatchObject({ status: "accepted" });
   const suppressions = await t.query(components.zohoCpaas.suppressions.list, {
     channel: "email",
@@ -391,7 +391,7 @@ test("unique client reference resolves a multi-recipient batch envelope", async 
   vi.stubEnv("ZOHO_CPAAS_TEST_MODE", "true");
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
   const t = fresh();
-  const ids = await t.mutation(components.zohoCpaas.messages.sendBatch, {
+  const ids = await t.mutation(components.zohoCpaas.email.sendBatch, {
     from: { address: "sender@example.test" },
     to: [
       { emailAddress: { address: "batch-one@example.test" } },
@@ -400,7 +400,7 @@ test("unique client reference resolves a multi-recipient batch envelope", async 
     cc: [{ address: "batch-copy@example.test" }],
     bcc: [{ address: "batch-archive@example.test" }],
     subject: "Batch identity",
-    text: "Body",
+    textbody: "Body",
   });
   await t.finishAllScheduledFunctions(vi.runAllTimers);
   const envelope = {
@@ -428,17 +428,17 @@ test("unique client reference resolves a multi-recipient batch envelope", async 
     expect((await post(t, body)).status).toBe(200);
   }
   expect(
-    await t.query(components.zohoCpaas.messages.getMessage, { messageId: atOrThrow(ids, 1) }),
+    await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 1) }),
   ).toMatchObject({
     status: "bounced",
   });
   expect(
-    await t.query(components.zohoCpaas.messages.getMessage, { messageId: atOrThrow(ids, 2) }),
+    await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 2) }),
   ).toMatchObject({
     status: "complained",
   });
   expect(
-    await t.query(components.zohoCpaas.messages.getMessage, { messageId: atOrThrow(ids, 0) }),
+    await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(ids, 0) }),
   ).toMatchObject({
     status: "accepted",
   });

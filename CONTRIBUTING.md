@@ -22,6 +22,16 @@ Node 24 and pnpm 12.9.1 are pinned in `.mise.toml`. Codegen and smoke use an ano
   (`feat:`, `fix:`, `docs:`, `test:`, `chore:`); a breaking change adds `!` after the type.
 - Until 1.0.0, a breaking change ships without compatibility code, deprecation periods or data
   migrations; its changeset is a `minor` bump that states what breaks.
+- Add a changeset for every consumer-visible change to `@operatornest/convex-zoho-cpaas`.
+- Public component functions have `args` and `returns` validators; reads are bounded and indexed.
+- Errors on caller-reachable paths come from `zohoCpaasError` in `src/shared/errors.ts`; add each
+  `ZOHO_CPAAS_` code, its fixed message and its README Errors row together.
+- No Node built-ins, `Buffer` or `process` in `src/`. Read provider credentials and master keys
+  only through generated component env; never put them in arguments, rows, logs or errors.
+- Tests use generated credentials or fixed test-only vectors and stub external requests.
+- Regenerate committed bindings from their inputs with `pnpm build:codegen`.
+- Update affected examples, README claims and ADR contracts. Run the checks in AGENTS.md and
+  report commands and exit codes.
 
 ## Provider qualification
 
@@ -29,7 +39,7 @@ A maintainer prepares ignored `.env.e2e` from `.env.e2e.example` using their own
 
 `pnpm e2e` holds the shared lock, builds, starts local Convex and a quick tunnel, and loads component env without test mode. In Zoho's Agent webhook settings, configure the printed URL, select the tested events, and set the Authentication Key to the configured webhook secret. Press Enter after saving both settings. Open the email and click its link during capture. Dashboard **Send Test** does not prove tracked delivery.
 
-The runner checks acceptance, signed events, mapping, callback correlation, replay deduplication, and optional suppression. It saves redacted fixtures and a dated report in `tests/fixtures/e2e/`; review them before committing. The session-gated capture route accepts at most 64 attempts. Raw captures are removed on exit or expire after 30 minutes. Do not run e2e in CI. `pnpm e2e:env` loads accepted env names without provider calls.
+The runner checks acceptance, signed events, mapping, callback correlation, replay deduplication, and optional suppression. It saves redacted fixtures and a dated report in `tests/fixtures/e2e/`; inspect them before committing. The session-gated capture route accepts at most 64 attempts. Raw captures are removed on exit or expire after 30 minutes. Do not run e2e in CI. `pnpm e2e:env` loads accepted env names without provider calls.
 
 ## Reports and releases
 

@@ -19,6 +19,7 @@ test("cleanup marks stuck sends unknown, blanks terminal jobs, and drains bounde
   const { pending, whatsapp, stuck, siblingStuck, terminal, recentTerminal, stuckJob, attached } =
     await t.run(async (ctx) => {
       const pendingId = await ctx.db.insert("messages", {
+        testMode: false,
         channel: "email",
         to: "pending@example.test",
         from: "from@example.test",
@@ -29,6 +30,7 @@ test("cleanup marks stuck sends unknown, blanks terminal jobs, and drains bounde
         createdAt: old,
       });
       const whatsappId = await ctx.db.insert("messages", {
+        testMode: false,
         channel: "whatsapp",
         to: "+919876543210",
         from: "+14155550142",
@@ -39,6 +41,7 @@ test("cleanup marks stuck sends unknown, blanks terminal jobs, and drains bounde
         createdAt: old,
       });
       const stuckId = await ctx.db.insert("messages", {
+        testMode: false,
         channel: "email",
         to: "stuck@example.test",
         from: "from@example.test",
@@ -50,6 +53,7 @@ test("cleanup marks stuck sends unknown, blanks terminal jobs, and drains bounde
         sendingAt: old,
       });
       const siblingStuckId = await ctx.db.insert("messages", {
+        testMode: false,
         channel: "email",
         to: "stuck-sibling@example.test",
         from: "from@example.test",
@@ -61,6 +65,7 @@ test("cleanup marks stuck sends unknown, blanks terminal jobs, and drains bounde
         sendingAt: old,
       });
       const terminalId = await ctx.db.insert("messages", {
+        testMode: false,
         channel: "email",
         to: "old@example.test",
         from: "from@example.test",
@@ -72,6 +77,7 @@ test("cleanup marks stuck sends unknown, blanks terminal jobs, and drains bounde
         terminalAt: old,
       });
       const recentTerminalId = await ctx.db.insert("messages", {
+        testMode: false,
         channel: "email",
         to: "recent-terminal@example.test",
         from: "from@example.test",
@@ -95,21 +101,23 @@ test("cleanup marks stuck sends unknown, blanks terminal jobs, and drains bounde
       await ctx.db.patch("messages", stuckId, { jobId: stuckJobId });
       await ctx.db.patch("messages", siblingStuckId, { jobId: stuckJobId });
       const attachedId = await ctx.db.insert("events", {
+        testMode: false,
         messageId: terminalId,
         channel: "email",
         type: "open",
         occurredAt: Date.now(),
         receivedAt: Date.now(),
-        providerEventId: "attached",
+        zohoEventId: "attached",
         raw: "{}",
       });
       for (let i = 0; i < 205; i++)
         await ctx.db.insert("events", {
+          testMode: false,
           channel: "email",
           type: "open",
           occurredAt: old,
           receivedAt: old,
-          providerEventId: `old-${i}`,
+          zohoEventId: `old-${i}`,
           raw: "{}",
         });
       await ctx.db.insert("sendJobs", {
@@ -180,6 +188,7 @@ test("cleanup does not finalize a job with an active sibling beyond 500 rows", a
     for (let i = 0; i < 501; i++) {
       const isQueued = i === 500;
       const messageId = await ctx.db.insert("messages", {
+        testMode: false,
         channel: "email",
         to: `recipient-${i}@example.test`,
         from: "from@example.test",
@@ -227,7 +236,8 @@ test("cleanup removes expired completed jobs and webhook receipts", async () => 
       finishedAt: old,
     }),
     receipt: await ctx.db.insert("webhookReceipts", {
-      providerEventId: "expired-receipt",
+      testMode: false,
+      zohoEventId: "expired-receipt",
       bodyHash: "expired-body-hash",
       createdAt: old,
     }),
@@ -254,6 +264,7 @@ test("cleanup ages current sends by sendingAt and keeps old jobs with fresh atte
       createdAt: old,
     });
     const messageId = await ctx.db.insert("messages", {
+      testMode: false,
       channel: "email",
       to: "delayed-retry@example.test",
       from: "from@example.test",
@@ -266,6 +277,7 @@ test("cleanup ages current sends by sendingAt and keeps old jobs with fresh atte
       jobId,
     });
     const freshLegacyId = await ctx.db.insert("messages", {
+      testMode: false,
       channel: "email",
       to: "fresh-legacy@example.test",
       from: "from@example.test",
@@ -302,7 +314,8 @@ test("webhook receipts outlive shorter retention windows for at least 30 days", 
   const ids = await t.run(async (ctx) => {
     const receipt = (key: string, age: number) =>
       ctx.db.insert("webhookReceipts", {
-        providerEventId: key,
+        testMode: false,
+        zohoEventId: key,
         bodyHash: key,
         createdAt: Date.now() - age,
       });
@@ -318,6 +331,7 @@ test("webhook receipts outlive shorter retention windows for at least 30 days", 
 
 const baseMessage = (suffix: string, createdAt: number) =>
   ({
+    testMode: false,
     channel: "email",
     to: `${suffix}@example.test`,
     from: "from@example.test",
@@ -382,12 +396,13 @@ test("a message is deleted only after its events fit in the batch budget", async
     t.run(async (ctx) => {
       for (let i = 0; i < count; i++)
         await ctx.db.insert("events", {
+          testMode: false,
           messageId,
           channel: "email",
           type: "open",
           occurredAt: Date.now() + i,
           receivedAt: Date.now(),
-          providerEventId: `${messageId}-${i}`,
+          zohoEventId: `${messageId}-${i}`,
           raw: "{}",
         });
     });
@@ -420,11 +435,6 @@ test("a message is deleted only after its events fit in the batch budget", async
 });
 
 test.each([
-  ["abc", 30],
-  ["0", 30],
-  ["3651", 30],
-  ["2.5", 30],
-  ["", 30],
   ["3650", 3650],
   ["31", 31],
 ])("retention days %j resolves to %i days for terminal messages", async (configured, days) => {
@@ -448,3 +458,23 @@ test.each([
   expect(await t.run((ctx) => ctx.db.get("messages", ids.inside))).not.toBeNull();
   expect(await t.run((ctx) => ctx.db.get("messages", ids.outside))).toBeNull();
 });
+
+test.each(["abc", "0", "3651", "2.5", "", " 30 "])(
+  "retention rejects malformed days %j without deleting records",
+  async (configured) => {
+    vi.stubEnv("ZOHO_CPAAS_RETENTION_DAYS", configured);
+    const t = convexTest(schema, modules);
+    const messageId = await t.run((ctx) =>
+      ctx.db.insert("messages", {
+        ...baseMessage("retained", 1),
+        status: "accepted",
+        testMode: false,
+        terminalAt: 1,
+      }),
+    );
+    await expect(t.mutation(internal.cleanup.run, {})).rejects.toMatchObject({
+      data: { code: "ZOHO_CPAAS_NOT_CONFIGURED" },
+    });
+    expect(await t.run((ctx) => ctx.db.get("messages", messageId))).not.toBeNull();
+  },
+);

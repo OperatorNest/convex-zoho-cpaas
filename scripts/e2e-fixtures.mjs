@@ -111,8 +111,8 @@ function expectedFromParsed(parsed) {
       type: eventNames.has(event.type) || event.type === "unknown" ? event.type : "unknown",
       channel: ["email", "whatsapp", "unknown"].includes(event.channel) ? event.channel : "unknown",
       hasRecipient: typeof event.recipient === "string",
-      hasProviderRequestId: typeof event.providerRequestId === "string",
-      hasProviderMessageId: typeof event.providerMessageId === "string",
+      hasProviderRequestId: typeof event.zohoRequestId === "string",
+      hasProviderMessageId: typeof event.zohoMessageId === "string",
       hasClientReference: typeof event.clientReference === "string",
     })),
   };

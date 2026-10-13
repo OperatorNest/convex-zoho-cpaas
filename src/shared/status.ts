@@ -1,7 +1,9 @@
 import type { Infer } from "convex/values";
 import { channelValidator, statusValidator } from "./validators.js";
 
+/** A Zoho communication channel supported by this component. */
 export type Channel = Infer<typeof channelValidator>;
+/** The stored lifecycle state of an outbound message. */
 export type MessageStatus = Infer<typeof statusValidator>;
 
 const rank: Partial<Record<MessageStatus, number>> = {

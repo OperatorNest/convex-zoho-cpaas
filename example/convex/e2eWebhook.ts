@@ -110,7 +110,7 @@ export const begin = internalMutation({
       args.durationMinutes > 1440
     )
       throw new ConvexError({
-        code: "ZOHO_CPAAS_VALIDATION_FAILED",
+        code: "ZOHO_CPAAS_INVALID_ARGUMENT",
         message: "Invalid e2e session configuration",
       });
     const old = await ctx.db

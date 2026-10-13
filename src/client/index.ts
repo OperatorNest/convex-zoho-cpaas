@@ -13,7 +13,7 @@ import type { Infer } from "convex/values";
 import type { ComponentApi } from "../component/_generated/component.js";
 import type { Doc } from "../component/_generated/dataModel.js";
 import type { EmailAddress } from "../shared/provider.js";
-import { zohoError } from "../shared/errors.js";
+import { zohoCpaasError } from "../shared/errors.js";
 import type { Channel, MessageStatus } from "../shared/status.js";
 import type { NormalizedWebhookEvent } from "../shared/webhook.js";
 import { maxWebhookBodyBytes } from "../shared/webhook.js";
@@ -27,8 +27,11 @@ import {
 } from "../shared/validators.js";
 
 export type { Channel, MessageStatus } from "../shared/status.js";
+/** A stored outbound message with its delivery state and Zoho identifiers. */
 export type Message = Doc<"messages">;
+/** A stored event received from Zoho for an outbound message. */
 export type MessageEvent = Doc<"events">;
+/** A persistent channel address excluded from future sends. */
 export type Suppression = Doc<"suppressions">;
 export type { EmailAddress, EmailAttachment, InlineImage, Region } from "../shared/provider.js";
 export { regionValidator } from "../shared/provider.js";
@@ -39,58 +42,67 @@ export {
   statusValidator,
   channelValidator,
 } from "../shared/validators.js";
-export type { ZohoCpaasErrorCode, ZohoCpaasMessageErrorCode } from "../shared/errors.js";
+export type { ZohoCpaasErrorCode, ZohoCpaasErrorData } from "../shared/errors.js";
+export type { NormalizedWebhookEvent, WebhookEventType } from "../shared/webhook.js";
 export { normalizedWebhookEventValidator } from "../shared/webhook.js";
 
+/** Arguments for an inline transactional email. */
 export type EmailSend = Omit<Infer<typeof emailSendArgs>, "from" | "testMode"> & {
   from?: EmailAddress;
 };
+/** Arguments for an email using a pre-created Zoho template. */
 export type EmailTemplateSend = Omit<Infer<typeof emailTemplateArgs>, "from" | "testMode"> & {
   from?: EmailAddress;
 };
+/** Arguments for one email batch with recipient merge values. */
 export type EmailBatchSend = Omit<Infer<typeof emailBatchArgs>, "from" | "testMode"> & {
   from?: EmailAddress;
 };
+/** Arguments for one template email batch with recipient merge values. */
 export type EmailTemplateBatchSend = Omit<
   Infer<typeof emailTemplateBatchArgs>,
   "from" | "testMode"
 > & { from?: EmailAddress };
+/** Arguments for an experimental India DLT template SMS. */
 export type SmsTemplateSend = Omit<Infer<typeof smsTemplateArgs>, "testMode">;
+/** Arguments for an experimental pre-approved WhatsApp template message. */
 export type WhatsappTemplateSend = Omit<Infer<typeof whatsappTemplateArgs>, "testMode">;
 
+/** The Convex query capability used to read stored component rows. */
 export type QueryContext = Pick<GenericQueryCtx<GenericDataModel>, "runQuery">;
+/** The Convex mutation capability used to enqueue or cancel outbound messages. */
 export type MutationContext = Pick<GenericMutationCtx<GenericDataModel>, "runMutation">;
+/** The Convex action capability used to upload a file cache. */
 export type ActionContext = Pick<GenericActionCtx<GenericDataModel>, "runAction">;
+/** A verified Zoho event and its message correlation passed to the internal callback. */
 export type ZohoCpaasEventArgs = {
   event: NormalizedWebhookEvent;
   messageId?: string;
   ambiguous: boolean;
 };
 
-export { isZohoCpaasError } from "../shared/errors.js";
+export { ZOHO_CPAAS_ERROR_CODES, isZohoCpaasError } from "../shared/errors.js";
 
+/** Sender, simulation and verified-event callback options for the Zoho CPaaS client. */
 export type ZohoCpaasOptions = {
   testMode?: boolean;
   defaultFrom?: EmailAddress;
   onEvent?: FunctionReference_future<"mutation", "internal", ZohoCpaasEventArgs, null>;
 };
 
+/** A Convex client for Zoho messaging, stored messages, suppressions and file caches. */
 export class ZohoCpaas {
+  /** Create a Zoho CPaaS client with optional sender, simulation and event callback settings. */
   constructor(
     private readonly component: ComponentApi,
     private readonly options: ZohoCpaasOptions = {},
   ) {}
 
-  private from(from: EmailAddress | undefined): EmailAddress {
-    const address = from ?? this.options.defaultFrom;
-    if (!address) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
-    return { address: address.address, name: address.name };
-  }
-
   readonly email = {
+    /** Enqueue an inline transactional email for each requested recipient. */
     send: (ctx: MutationContext, args: EmailSend) =>
-      ctx.runMutation(this.component.messages.send, {
-        from: this.from(args.from),
+      ctx.runMutation(this.component.email.send, {
+        from: resolveEmailFrom(args.from, this.options.defaultFrom),
         to: args.to,
         cc: args.cc,
         bcc: args.bcc,
@@ -103,13 +115,14 @@ export class ZohoCpaas {
         inlineImages: args.inlineImages,
         idempotencyKey: args.idempotencyKey,
         subject: args.subject,
-        html: args.html,
-        text: args.text,
+        htmlbody: args.htmlbody,
+        textbody: args.textbody,
         testMode: this.options.testMode,
       }),
+    /** Enqueue an email using a pre-created Zoho template. */
     sendTemplate: (ctx: MutationContext, args: EmailTemplateSend) =>
-      ctx.runMutation(this.component.messages.sendTemplate, {
-        from: this.from(args.from),
+      ctx.runMutation(this.component.email.sendTemplate, {
+        from: resolveEmailFrom(args.from, this.options.defaultFrom),
         to: args.to,
         cc: args.cc,
         bcc: args.bcc,
@@ -126,9 +139,10 @@ export class ZohoCpaas {
         mergeInfo: args.mergeInfo,
         testMode: this.options.testMode,
       }),
+    /** Enqueue one email batch with recipient merge values. */
     sendBatch: (ctx: MutationContext, args: EmailBatchSend) =>
-      ctx.runMutation(this.component.messages.sendBatch, {
-        from: this.from(args.from),
+      ctx.runMutation(this.component.email.sendBatch, {
+        from: resolveEmailFrom(args.from, this.options.defaultFrom),
         to: args.to,
         cc: args.cc,
         bcc: args.bcc,
@@ -141,14 +155,15 @@ export class ZohoCpaas {
         inlineImages: args.inlineImages,
         idempotencyKey: args.idempotencyKey,
         subject: args.subject,
-        html: args.html,
-        text: args.text,
+        htmlbody: args.htmlbody,
+        textbody: args.textbody,
         mergeInfo: args.mergeInfo,
         testMode: this.options.testMode,
       }),
+    /** Enqueue one template email batch with recipient merge values. */
     sendTemplateBatch: (ctx: MutationContext, args: EmailTemplateBatchSend) =>
-      ctx.runMutation(this.component.messages.sendTemplateBatch, {
-        from: this.from(args.from),
+      ctx.runMutation(this.component.email.sendTemplateBatch, {
+        from: resolveEmailFrom(args.from, this.options.defaultFrom),
         to: args.to,
         cc: args.cc,
         bcc: args.bcc,
@@ -165,11 +180,12 @@ export class ZohoCpaas {
         mergeInfo: args.mergeInfo,
         testMode: this.options.testMode,
       }),
-    uploadFile: (
-      ctx: ActionContext,
-      args: { name: string; mimeType: string; content: ArrayBuffer },
-    ) =>
-      ctx.runAction(this.component.files.uploadFile, {
+  };
+
+  readonly files = {
+    /** Upload binary email media and return its Zoho file-cache key. */
+    upload: (ctx: ActionContext, args: { name: string; mimeType: string; content: ArrayBuffer }) =>
+      ctx.runAction(this.component.files.upload, {
         name: args.name,
         mimeType: args.mimeType,
         content: args.content,
@@ -177,43 +193,47 @@ export class ZohoCpaas {
       }),
   };
 
-  readonly experimental = {
-    whatsapp: {
-      sendTemplate: (ctx: MutationContext, args: WhatsappTemplateSend) =>
-        ctx.runMutation(this.component.messages.sendWhatsappTemplate, {
-          from: args.from,
-          to: args.to,
-          agentId: args.agentId,
-          templateKey: args.templateKey,
-          templateAlias: args.templateAlias,
-          mergeInfo: args.mergeInfo,
-          clientReference: args.clientReference,
-          idempotencyKey: args.idempotencyKey,
-          testMode: this.options.testMode,
-        }),
-    },
-    sms: {
-      sendTemplate: (ctx: MutationContext, args: SmsTemplateSend) =>
-        ctx.runMutation(this.component.messages.sendSmsTemplate, {
-          senderKey: args.senderKey,
-          to: args.to,
-          templateKey: args.templateKey,
-          templateAlias: args.templateAlias,
-          mergeInfo: args.mergeInfo,
-          clientReference: args.clientReference,
-          idempotencyKey: args.idempotencyKey,
-          testMode: this.options.testMode,
-        }),
-    },
+  readonly whatsapp = {
+    /** Enqueue an experimental pre-approved WhatsApp template message. */
+    sendTemplate: (ctx: MutationContext, args: WhatsappTemplateSend) =>
+      ctx.runMutation(this.component.whatsapp.sendTemplate, {
+        from: args.from,
+        to: args.to,
+        zohoAgentId: args.zohoAgentId,
+        templateKey: args.templateKey,
+        templateAlias: args.templateAlias,
+        mergeInfo: args.mergeInfo,
+        clientReference: args.clientReference,
+        idempotencyKey: args.idempotencyKey,
+        testMode: this.options.testMode,
+      }),
+  };
+
+  readonly sms = {
+    /** Enqueue an experimental India DLT template SMS. */
+    sendTemplate: (ctx: MutationContext, args: SmsTemplateSend) =>
+      ctx.runMutation(this.component.sms.sendTemplate, {
+        senderKey: args.senderKey,
+        to: args.to,
+        templateKey: args.templateKey,
+        templateAlias: args.templateAlias,
+        mergeInfo: args.mergeInfo,
+        clientReference: args.clientReference,
+        idempotencyKey: args.idempotencyKey,
+        testMode: this.options.testMode,
+      }),
   };
 
   readonly messages = {
-    status: async (ctx: QueryContext) => {
-      const status = await ctx.runQuery(this.component.messages.status, {});
+    /** Read email configuration, simulation and region state. */
+    getConfig: async (ctx: QueryContext, _args: Record<string, never>) => {
+      const status = await ctx.runQuery(this.component.messages.getConfig, {});
       return { ...status, testMode: this.options.testMode === true || status.testMode };
     },
+    /** Read a stored message by its component message ID. */
     get: (ctx: QueryContext, args: { messageId: string }) =>
-      ctx.runQuery(this.component.messages.getMessage, { messageId: args.messageId }),
+      ctx.runQuery(this.component.messages.get, { messageId: args.messageId }),
+    /** Read a bounded page of stored messages matching the supplied filters. */
     list: (
       ctx: QueryContext,
       args: {
@@ -223,12 +243,13 @@ export class ZohoCpaas {
         paginationOpts: PaginationOptions;
       },
     ) =>
-      ctx.runQuery(this.component.messages.listMessages, {
+      ctx.runQuery(this.component.messages.list, {
         recipient: args.recipient,
         channel: args.channel,
         status: args.status,
         paginationOpts: pageArgs(args.paginationOpts),
       }),
+    /** Read a bounded page of events for a stored message. */
     listEvents: (
       ctx: QueryContext,
       args: { messageId: string; paginationOpts: PaginationOptions },
@@ -237,10 +258,12 @@ export class ZohoCpaas {
         messageId: args.messageId,
         paginationOpts: pageArgs(args.paginationOpts),
       }),
+    /** Stop pending attempts for a stored message. */
     cancel: (ctx: MutationContext, args: { messageId: string }) =>
       ctx.runMutation(this.component.messages.cancel, { messageId: args.messageId }),
   };
   readonly suppressions = {
+    /** Read a bounded page of persistent suppressions for a channel. */
     list: (
       ctx: QueryContext,
       args: {
@@ -252,6 +275,7 @@ export class ZohoCpaas {
         channel: args.channel,
         paginationOpts: pageArgs(args.paginationOpts),
       }),
+    /** Remove a persistent suppression for the normalized channel address. */
     remove: (ctx: MutationContext, args: { channel: Channel; address: string }) =>
       ctx.runMutation(this.component.suppressions.remove, {
         channel: args.channel,
@@ -259,18 +283,30 @@ export class ZohoCpaas {
       }),
   };
 
+  /** Register the signed Zoho webhook route with the client event callback. */
   registerRoutes(http: HttpRouter, options: { path?: `/${string}` } = {}) {
     registerRoutes(http, this.component, {
-      ...options,
+      path: options.path,
       ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
     });
   }
+}
+
+/** Resolve the email sender from the send arguments or the client default. */
+export function resolveEmailFrom(
+  from: EmailAddress | undefined,
+  defaultFrom: EmailAddress | undefined,
+): EmailAddress {
+  const address = from ?? defaultFrom;
+  if (!address) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
+  return { address: address.address, name: address.name };
 }
 
 function pageArgs(options: PaginationOptions): PaginationOptions {
   return { numItems: options.numItems, cursor: options.cursor, endCursor: options.endCursor };
 }
 
+/** Register a signed Zoho webhook route with an optional internal event callback. */
 export function registerRoutes(
   http: HttpRouter,
   component: ComponentApi,
@@ -306,7 +342,9 @@ export function registerRoutes(
       if (response.reason === "oversized_body")
         return new Response("Webhook body exceeds limit", { status: 413 });
       if (response.reason === "invalid_signature")
-        return new Response("Invalid webhook signature", { status: 401 });
+        return Response.json(zohoCpaasError("ZOHO_CPAAS_INVALID_WEBHOOK_SIGNATURE").data, {
+          status: 401,
+        });
       return new Response(response.duplicate ? "Duplicate" : "OK", { status: 200 });
     }),
   });

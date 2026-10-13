@@ -1,3 +1,5 @@
+import { atOrThrow } from "../test-helpers.js";
+
 import { register as registerWorkpool } from "@convex-dev/workpool/test";
 import { convexTest } from "convex-test";
 import { afterEach, expect, test, vi } from "vitest";
@@ -18,6 +20,7 @@ test("completion callbacks count pre-begin crashes once and cap retries at five"
   registerWorkpool(t, "workpool");
   const { jobId, messageId } = await t.run(async (ctx) => {
     const seededMessageId = await ctx.db.insert("messages", {
+      testMode: false,
       channel: "email",
       to: "crash@example.test",
       from: "sender@example.test",
@@ -76,14 +79,14 @@ test("a crash before begin keeps a canceled retry non-replayable", async () => {
     from: { address: "sender@example.test" },
     to: [{ address: "crash@example.test" }],
     subject: "Crash",
-    text: "Body",
+    textbody: "Body",
     idempotencyKey: "crash-before-begin",
     testMode: true,
   };
-  const ids = await t.mutation(api.messages.send, args);
+  const ids = await t.mutation(api.email.send, args);
   const messageId = ids.at(0);
   if (messageId === undefined) throw new Error("Expected sent message");
-  const row = await t.query(api.messages.getMessage, { messageId });
+  const row = await t.query(api.messages.get, { messageId });
   if (!row?.jobId) throw new Error("Expected send job for message");
   const jobId = row.jobId;
   const job = await t.run((ctx) => ctx.db.get("sendJobs", jobId));
@@ -93,13 +96,13 @@ test("a crash before begin keeps a canceled retry non-replayable", async () => {
     context: { jobId: row.jobId, attempt: 1 },
     result: { kind: "failed", error: "worker crashed before begin" },
   });
-  expect(await t.query(api.messages.getMessage, { messageId })).toMatchObject({
+  expect(await t.query(api.messages.get, { messageId })).toMatchObject({
     status: "unknown",
     attempts: 1,
     failureDefinitive: false,
   });
   expect(await t.mutation(api.messages.cancel, { messageId })).toBe(true);
-  expect(await t.mutation(api.messages.send, args)).toEqual(ids);
+  expect(await t.mutation(api.email.send, args)).toEqual(ids);
 });
 
 test("a stale completion preserves a provider-confirmed definitive failure", async () => {
@@ -107,6 +110,7 @@ test("a stale completion preserves a provider-confirmed definitive failure", asy
   registerWorkpool(t, "workpool");
   const { jobId, messageId } = await t.run(async (ctx) => {
     const seededMessageId = await ctx.db.insert("messages", {
+      testMode: false,
       channel: "email",
       to: "rejected@example.test",
       from: "sender@example.test",
@@ -159,3 +163,204 @@ test("a stale completion preserves a provider-confirmed definitive failure", asy
     failureDefinitive: true,
   });
 });
+
+const emailRequest = {
+  from: { address: "sender@example.test" },
+  to: [{ address: "a@example.test" }],
+  subject: "Subject",
+  textbody: "Body",
+  testMode: true,
+};
+const createComponentTest = () => {
+  const t = convexTest(schema, modules);
+  registerWorkpool(t, "workpool");
+  return t;
+};
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
+
+test("an attempt excludes recipients suppressed after enqueue", async () => {
+  vi.useFakeTimers();
+  const t = createComponentTest();
+  const ids = await t.mutation(api.email.send, {
+    ...emailRequest,
+    to: [...emailRequest.to, { address: "b@example.test" }],
+  });
+  const message = await t.query(api.messages.get, { messageId: atOrThrow(ids, 0) });
+  if (!message?.jobId) throw new Error("Missing job");
+  await t.run((ctx) =>
+    ctx.db.insert("suppressions", {
+      testMode: false,
+      channel: "email",
+      address: "a@example.test",
+      reason: "complaint",
+      createdAt: 1,
+    }),
+  );
+  expect(
+    await t.mutation(internal.sends.begin, { jobId: message.jobId, attempt: 1 }),
+  ).toMatchObject({ active: ["b@example.test"] });
+  expect(await t.query(api.messages.get, { messageId: atOrThrow(ids, 0) })).toMatchObject({
+    status: "suppressed",
+  });
+});
+
+test.each([false, true])(
+  "transport completion preserves a delivered webhook before completion=%s",
+  async (early) => {
+    vi.useFakeTimers();
+    const t = createComponentTest();
+    const id = await t.mutation(api.whatsapp.sendTemplate, {
+      from: "+15550100001",
+      to: "+15550100002",
+      templateKey: "template",
+      testMode: true,
+    });
+    const message = await t.query(api.messages.get, { messageId: id });
+    if (!message?.jobId) throw new Error("Missing job");
+    const jobId = message.jobId;
+    const job = await t.run((ctx) => ctx.db.get("sendJobs", jobId));
+    if (!job?.workId) throw new Error("Missing work");
+    await t.mutation(internal.sends.begin, { jobId: job._id, attempt: 1 });
+    const deliver = () =>
+      t.mutation(internal.webhooks.commit, {
+        zohoEventId: "delivery",
+        bodyHash: "hash",
+        events: [
+          {
+            zohoEventId: "delivery",
+            channel: "whatsapp",
+            type: "delivered",
+            occurredAt: 2,
+            clientReference: message.clientReference,
+            recipient: message.to,
+            raw: {},
+          },
+        ],
+      });
+    if (early) await deliver();
+    await t.mutation(internal.sends.complete, {
+      workId: job.workId,
+      context: { jobId: job._id, attempt: 1 },
+      result: {
+        kind: "success",
+        returnValue: {
+          kind: "failed",
+          failureDefinitive: false,
+          error: {
+            code: "ZOHO_CPAAS_NETWORK_ERROR",
+            message: "The send request outcome is unknown.",
+          },
+        },
+      },
+    });
+    if (!early) {
+      expect(await t.query(api.messages.get, { messageId: id })).toMatchObject({
+        status: "unknown",
+      });
+      await deliver();
+    }
+    expect(await t.query(api.messages.get, { messageId: id })).toMatchObject({
+      status: "delivered",
+    });
+  },
+);
+
+test("an SMS action failure before fetch permits a new send with the same idempotency key", async () => {
+  vi.useFakeTimers();
+  vi.stubEnv("ZOHO_CPAAS_TOKEN", "dummy-token");
+  vi.stubEnv("ZOHO_CPAAS_REGION", "in");
+  const t = createComponentTest();
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  const args = {
+    senderKey: "sender",
+    to: "919876543210",
+    templateKey: "template",
+    idempotencyKey: "unsent",
+  };
+  const id = await t.mutation(api.sms.sendTemplate, args);
+  const message = await t.query(api.messages.get, { messageId: id });
+  if (!message?.jobId) throw new Error("Missing job");
+  const jobId = message.jobId;
+  await t.run((ctx) => ctx.db.patch("sendJobs", jobId, { payload: "{broken" }));
+  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(await t.query(api.messages.get, { messageId: id })).toMatchObject({
+    status: "failed",
+    failureDefinitive: true,
+    error: { code: "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED" },
+  });
+  expect(await t.mutation(api.sms.sendTemplate, args)).not.toBe(id);
+});
+
+test.each([false, true])(
+  "SMS rechecks the India endpoint before sending with testMode=%s",
+  async (testMode) => {
+    vi.useFakeTimers();
+    vi.stubEnv("ZOHO_CPAAS_SMS_TOKEN", "dummy-token");
+    vi.stubEnv("ZOHO_CPAAS_REGION", "in");
+    const t = createComponentTest();
+    const id = await t.mutation(api.sms.sendTemplate, {
+      senderKey: "sender",
+      to: "919876543210",
+      templateKey: "template",
+      testMode,
+    });
+    const message = await t.query(api.messages.get, { messageId: id });
+    if (!message?.jobId) throw new Error("Missing job");
+    vi.stubEnv("ZOHO_CPAAS_REGION", "us");
+    const fetchMock = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await t.action(internal.sends.execute, { jobId: message.jobId, attempt: 1 });
+    expect(result).toMatchObject({ kind: "skipped" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await t.query(api.messages.get, { messageId: id })).toMatchObject({
+      status: "failed",
+      error: { code: "ZOHO_CPAAS_UNSUPPORTED_REGION" },
+    });
+  },
+);
+
+test.each(["sms", "whatsapp"] as const)(
+  "%s never retries an unrecognized proxy 5xx code or releases its idempotency key",
+  async (channel) => {
+    vi.useFakeTimers();
+    vi.stubEnv("ZOHO_CPAAS_TOKEN", "dummy-token");
+    vi.stubEnv("ZOHO_CPAAS_REGION", "in");
+    for (const status of [500, 503]) {
+      const t = createComponentTest();
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { code: "SERVICE_UNAVAILABLE" } }), { status }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const sendMessage = () =>
+        channel === "sms"
+          ? t.mutation(api.sms.sendTemplate, {
+              senderKey: "sender",
+              to: "919876543210",
+              templateKey: "template",
+              idempotencyKey: "proxy-failure",
+            })
+          : t.mutation(api.whatsapp.sendTemplate, {
+              from: "+15550100001",
+              to: "+15550100002",
+              templateKey: "template",
+              idempotencyKey: "proxy-failure",
+            });
+      const id = await sendMessage();
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      expect(await t.query(api.messages.get, { messageId: id })).toMatchObject({
+        status: "unknown",
+        failureDefinitive: false,
+        attempts: 1,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(await sendMessage()).toBe(id);
+    }
+  },
+);

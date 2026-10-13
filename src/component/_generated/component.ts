@@ -23,212 +23,7 @@ import type { FunctionReference } from "convex/server";
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
-    files: {
-      uploadFile: FunctionReference<
-        "action",
-        "internal",
-        {
-          content: ArrayBuffer;
-          mimeType: string;
-          name: string;
-          testMode?: boolean;
-        },
-        string,
-        Name
-      >;
-    };
-    messages: {
-      cancel: FunctionReference<
-        "mutation",
-        "internal",
-        { messageId: string },
-        boolean,
-        Name
-      >;
-      getMessage: FunctionReference<
-        "query",
-        "internal",
-        { messageId: string },
-        {
-          _creationTime: number;
-          _id: string;
-          attempts: number;
-          canceledAt?: number;
-          channel: "email" | "sms" | "whatsapp";
-          clientReference: string;
-          createdAt: number;
-          error?: {
-            code:
-              | "ZOHO_CPAAS_IDEMPOTENCY_CONFLICT"
-              | "ZOHO_CPAAS_ALL_SUPPRESSED"
-              | "ZOHO_CPAAS_VALIDATION_FAILED"
-              | "ZOHO_CPAAS_NOT_CONFIGURED"
-              | "ZOHO_CPAAS_INVALID_CONFIG"
-              | "ZOHO_CPAAS_UNSUPPORTED_REGION"
-              | "ZOHO_CPAAS_UPLOAD_FAILED"
-              | "ZOHO_CPAAS_PROVIDER_REJECTED"
-              | "ZOHO_CPAAS_NETWORK_ERROR"
-              | "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED"
-              | "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG"
-              | "ZOHO_CPAAS_STUCK"
-              | "ZOHO_CPAAS_UNRECOGNIZED_SUCCESS_BODY";
-            message: string;
-            providerCode?: string;
-            providerStatus?: number;
-          };
-          failureDefinitive?: boolean;
-          from: string;
-          jobId?: string;
-          providerMessageId?: string;
-          providerRequestId?: string;
-          region: string;
-          sendingAt?: number;
-          sentAt?: number;
-          status:
-            | "queued"
-            | "sending"
-            | "accepted"
-            | "unknown"
-            | "delivered"
-            | "read"
-            | "failed"
-            | "bounced"
-            | "complained"
-            | "suppressed"
-            | "canceled";
-          terminalAt?: number;
-          testMode?: boolean;
-          to: string;
-          warning?: string;
-        } | null,
-        Name
-      >;
-      listEvents: FunctionReference<
-        "query",
-        "internal",
-        {
-          messageId: string;
-          paginationOpts: {
-            cursor: string | null;
-            endCursor?: string | null;
-            id?: number;
-            maximumBytesRead?: number;
-            maximumRowsRead?: number;
-            numItems: number;
-          };
-        },
-        {
-          continueCursor: string;
-          isDone: boolean;
-          page: Array<{
-            _creationTime: number;
-            _id: string;
-            ambiguous?: boolean;
-            channel: "email" | "sms" | "whatsapp" | "unknown";
-            clientReference?: string;
-            messageId?: string;
-            occurredAt: number;
-            providerEventId: string;
-            providerMessageId?: string;
-            providerRequestId?: string;
-            raw: string;
-            receivedAt: number;
-            recipient?: string;
-            testMode?: boolean;
-            type: string;
-          }>;
-          pageStatus?: "SplitRecommended" | "SplitRequired" | null;
-          splitCursor?: string | null;
-        },
-        Name
-      >;
-      listMessages: FunctionReference<
-        "query",
-        "internal",
-        {
-          channel?: "email" | "sms" | "whatsapp";
-          paginationOpts: {
-            cursor: string | null;
-            endCursor?: string | null;
-            id?: number;
-            maximumBytesRead?: number;
-            maximumRowsRead?: number;
-            numItems: number;
-          };
-          recipient?: string;
-          status?:
-            | "queued"
-            | "sending"
-            | "accepted"
-            | "unknown"
-            | "delivered"
-            | "read"
-            | "failed"
-            | "bounced"
-            | "complained"
-            | "suppressed"
-            | "canceled";
-        },
-        {
-          continueCursor: string;
-          isDone: boolean;
-          page: Array<{
-            _creationTime: number;
-            _id: string;
-            attempts: number;
-            canceledAt?: number;
-            channel: "email" | "sms" | "whatsapp";
-            clientReference: string;
-            createdAt: number;
-            error?: {
-              code:
-                | "ZOHO_CPAAS_IDEMPOTENCY_CONFLICT"
-                | "ZOHO_CPAAS_ALL_SUPPRESSED"
-                | "ZOHO_CPAAS_VALIDATION_FAILED"
-                | "ZOHO_CPAAS_NOT_CONFIGURED"
-                | "ZOHO_CPAAS_INVALID_CONFIG"
-                | "ZOHO_CPAAS_UNSUPPORTED_REGION"
-                | "ZOHO_CPAAS_UPLOAD_FAILED"
-                | "ZOHO_CPAAS_PROVIDER_REJECTED"
-                | "ZOHO_CPAAS_NETWORK_ERROR"
-                | "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED"
-                | "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG"
-                | "ZOHO_CPAAS_STUCK"
-                | "ZOHO_CPAAS_UNRECOGNIZED_SUCCESS_BODY";
-              message: string;
-              providerCode?: string;
-              providerStatus?: number;
-            };
-            failureDefinitive?: boolean;
-            from: string;
-            jobId?: string;
-            providerMessageId?: string;
-            providerRequestId?: string;
-            region: string;
-            sendingAt?: number;
-            sentAt?: number;
-            status:
-              | "queued"
-              | "sending"
-              | "accepted"
-              | "unknown"
-              | "delivered"
-              | "read"
-              | "failed"
-              | "bounced"
-              | "complained"
-              | "suppressed"
-              | "canceled";
-            terminalAt?: number;
-            testMode?: boolean;
-            to: string;
-            warning?: string;
-          }>;
-          pageStatus?: "SplitRecommended" | "SplitRequired" | null;
-          splitCursor?: string | null;
-        },
-        Name
-      >;
+    email: {
       send: FunctionReference<
         "mutation",
         "internal",
@@ -243,7 +38,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           cc?: Array<{ address: string; name?: string }>;
           clientReference?: string;
           from: { address: string; name?: string };
-          html?: string;
+          htmlbody?: string;
           idempotencyKey?: string;
           inlineImages?: Array<{
             cid: string;
@@ -255,7 +50,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           replyTo?: Array<{ address: string; name?: string }>;
           subject: string;
           testMode?: boolean;
-          text?: string;
+          textbody?: string;
           to: Array<{ address: string; name?: string }>;
           trackClicks?: boolean;
           trackOpens?: boolean;
@@ -277,7 +72,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           cc?: Array<{ address: string; name?: string }>;
           clientReference?: string;
           from: { address: string; name?: string };
-          html?: string;
+          htmlbody?: string;
           idempotencyKey?: string;
           inlineImages?: Array<{
             cid: string;
@@ -290,7 +85,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           replyTo?: Array<{ address: string; name?: string }>;
           subject: string;
           testMode?: boolean;
-          text?: string;
+          textbody?: string;
           to: Array<{
             emailAddress: { address: string; name?: string };
             mergeInfo?: Record<string, string>;
@@ -299,75 +94,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           trackOpens?: boolean;
         },
         Array<string>,
-        Name
-      >;
-      sendSmsTemplate: FunctionReference<
-        "mutation",
-        "internal",
-        {
-          clientReference?: string;
-          idempotencyKey?: string;
-          mergeInfo?: Record<
-            string,
-            | string
-            | number
-            | boolean
-            | null
-            | Array<
-                | string
-                | number
-                | boolean
-                | null
-                | Array<
-                    | string
-                    | number
-                    | boolean
-                    | null
-                    | Array<string | number | boolean | null>
-                    | Record<string, string | number | boolean | null>
-                  >
-                | Record<
-                    string,
-                    | string
-                    | number
-                    | boolean
-                    | null
-                    | Array<string | number | boolean | null>
-                    | Record<string, string | number | boolean | null>
-                  >
-              >
-            | Record<
-                string,
-                | string
-                | number
-                | boolean
-                | null
-                | Array<
-                    | string
-                    | number
-                    | boolean
-                    | null
-                    | Array<string | number | boolean | null>
-                    | Record<string, string | number | boolean | null>
-                  >
-                | Record<
-                    string,
-                    | string
-                    | number
-                    | boolean
-                    | null
-                    | Array<string | number | boolean | null>
-                    | Record<string, string | number | boolean | null>
-                  >
-              >
-          >;
-          senderKey: string;
-          templateAlias?: string;
-          templateKey?: string;
-          testMode?: boolean;
-          to: string;
-        },
-        string,
         Name
       >;
       sendTemplate: FunctionReference<
@@ -441,11 +167,363 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Array<string>,
         Name
       >;
-      sendWhatsappTemplate: FunctionReference<
+    };
+    files: {
+      upload: FunctionReference<
+        "action",
+        "internal",
+        {
+          content: ArrayBuffer;
+          mimeType: string;
+          name: string;
+          testMode?: boolean;
+        },
+        string,
+        Name
+      >;
+    };
+    messages: {
+      cancel: FunctionReference<
+        "mutation",
+        "internal",
+        { messageId: string },
+        boolean,
+        Name
+      >;
+      get: FunctionReference<
+        "query",
+        "internal",
+        { messageId: string },
+        {
+          _creationTime: number;
+          _id: string;
+          attempts: number;
+          canceledAt?: number;
+          channel: "email" | "sms" | "whatsapp";
+          clientReference: string;
+          createdAt: number;
+          error?: {
+            code:
+              | "ZOHO_CPAAS_IDEMPOTENCY_CONFLICT"
+              | "ZOHO_CPAAS_ALL_SUPPRESSED"
+              | "ZOHO_CPAAS_INVALID_ARGUMENT"
+              | "ZOHO_CPAAS_NOT_FOUND"
+              | "ZOHO_CPAAS_INVALID_WEBHOOK_SIGNATURE"
+              | "ZOHO_CPAAS_NOT_CONFIGURED"
+              | "ZOHO_CPAAS_UNSUPPORTED_REGION"
+              | "ZOHO_CPAAS_PROVIDER_ERROR"
+              | "ZOHO_CPAAS_NETWORK_ERROR"
+              | "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED"
+              | "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG"
+              | "ZOHO_CPAAS_STUCK"
+              | "ZOHO_CPAAS_INVALID_RESPONSE";
+            message: string;
+            providerCode?: string;
+            providerStatus?: number;
+            retryable?: boolean;
+          };
+          failureDefinitive?: boolean;
+          from: string;
+          jobId?: string;
+          region: string;
+          sendingAt?: number;
+          sentAt?: number;
+          status:
+            | "queued"
+            | "sending"
+            | "accepted"
+            | "unknown"
+            | "delivered"
+            | "read"
+            | "failed"
+            | "bounced"
+            | "complained"
+            | "suppressed"
+            | "canceled";
+          terminalAt?: number;
+          testMode: boolean;
+          to: string;
+          warning?: string;
+          zohoMessageId?: string;
+          zohoRequestId?: string;
+        },
+        Name
+      >;
+      getConfig: FunctionReference<
+        "query",
+        "internal",
+        {},
+        { configured: boolean; region: string; testMode: boolean },
+        Name
+      >;
+      list: FunctionReference<
+        "query",
+        "internal",
+        {
+          channel?: "email" | "sms" | "whatsapp";
+          paginationOpts: {
+            cursor: string | null;
+            endCursor?: string | null;
+            id?: number;
+            maximumBytesRead?: number;
+            maximumRowsRead?: number;
+            numItems: number;
+          };
+          recipient?: string;
+          status?:
+            | "queued"
+            | "sending"
+            | "accepted"
+            | "unknown"
+            | "delivered"
+            | "read"
+            | "failed"
+            | "bounced"
+            | "complained"
+            | "suppressed"
+            | "canceled";
+        },
+        {
+          continueCursor: string;
+          isDone: boolean;
+          page: Array<{
+            _creationTime: number;
+            _id: string;
+            attempts: number;
+            canceledAt?: number;
+            channel: "email" | "sms" | "whatsapp";
+            clientReference: string;
+            createdAt: number;
+            error?: {
+              code:
+                | "ZOHO_CPAAS_IDEMPOTENCY_CONFLICT"
+                | "ZOHO_CPAAS_ALL_SUPPRESSED"
+                | "ZOHO_CPAAS_INVALID_ARGUMENT"
+                | "ZOHO_CPAAS_NOT_FOUND"
+                | "ZOHO_CPAAS_INVALID_WEBHOOK_SIGNATURE"
+                | "ZOHO_CPAAS_NOT_CONFIGURED"
+                | "ZOHO_CPAAS_UNSUPPORTED_REGION"
+                | "ZOHO_CPAAS_PROVIDER_ERROR"
+                | "ZOHO_CPAAS_NETWORK_ERROR"
+                | "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED"
+                | "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG"
+                | "ZOHO_CPAAS_STUCK"
+                | "ZOHO_CPAAS_INVALID_RESPONSE";
+              message: string;
+              providerCode?: string;
+              providerStatus?: number;
+              retryable?: boolean;
+            };
+            failureDefinitive?: boolean;
+            from: string;
+            jobId?: string;
+            region: string;
+            sendingAt?: number;
+            sentAt?: number;
+            status:
+              | "queued"
+              | "sending"
+              | "accepted"
+              | "unknown"
+              | "delivered"
+              | "read"
+              | "failed"
+              | "bounced"
+              | "complained"
+              | "suppressed"
+              | "canceled";
+            terminalAt?: number;
+            testMode: boolean;
+            to: string;
+            warning?: string;
+            zohoMessageId?: string;
+            zohoRequestId?: string;
+          }>;
+          pageStatus?: "SplitRecommended" | "SplitRequired" | null;
+          splitCursor?: string | null;
+        },
+        Name
+      >;
+      listEvents: FunctionReference<
+        "query",
+        "internal",
+        {
+          messageId: string;
+          paginationOpts: {
+            cursor: string | null;
+            endCursor?: string | null;
+            id?: number;
+            maximumBytesRead?: number;
+            maximumRowsRead?: number;
+            numItems: number;
+          };
+        },
+        {
+          continueCursor: string;
+          isDone: boolean;
+          page: Array<{
+            _creationTime: number;
+            _id: string;
+            ambiguous?: boolean;
+            channel: "email" | "sms" | "whatsapp" | "unknown";
+            clientReference?: string;
+            messageId?: string;
+            occurredAt: number;
+            raw: string;
+            receivedAt: number;
+            recipient?: string;
+            testMode: boolean;
+            type: string;
+            zohoEventId: string;
+            zohoMessageId?: string;
+            zohoRequestId?: string;
+          }>;
+          pageStatus?: "SplitRecommended" | "SplitRequired" | null;
+          splitCursor?: string | null;
+        },
+        Name
+      >;
+    };
+    sms: {
+      sendTemplate: FunctionReference<
         "mutation",
         "internal",
         {
-          agentId?: string;
+          clientReference?: string;
+          idempotencyKey?: string;
+          mergeInfo?: Record<
+            string,
+            | string
+            | number
+            | boolean
+            | null
+            | Array<
+                | string
+                | number
+                | boolean
+                | null
+                | Array<
+                    | string
+                    | number
+                    | boolean
+                    | null
+                    | Array<string | number | boolean | null>
+                    | Record<string, string | number | boolean | null>
+                  >
+                | Record<
+                    string,
+                    | string
+                    | number
+                    | boolean
+                    | null
+                    | Array<string | number | boolean | null>
+                    | Record<string, string | number | boolean | null>
+                  >
+              >
+            | Record<
+                string,
+                | string
+                | number
+                | boolean
+                | null
+                | Array<
+                    | string
+                    | number
+                    | boolean
+                    | null
+                    | Array<string | number | boolean | null>
+                    | Record<string, string | number | boolean | null>
+                  >
+                | Record<
+                    string,
+                    | string
+                    | number
+                    | boolean
+                    | null
+                    | Array<string | number | boolean | null>
+                    | Record<string, string | number | boolean | null>
+                  >
+              >
+          >;
+          senderKey: string;
+          templateAlias?: string;
+          templateKey?: string;
+          testMode?: boolean;
+          to: string;
+        },
+        string,
+        Name
+      >;
+    };
+    suppressions: {
+      list: FunctionReference<
+        "query",
+        "internal",
+        {
+          channel: "email" | "sms" | "whatsapp";
+          paginationOpts: {
+            cursor: string | null;
+            endCursor?: string | null;
+            id?: number;
+            maximumBytesRead?: number;
+            maximumRowsRead?: number;
+            numItems: number;
+          };
+        },
+        {
+          continueCursor: string;
+          isDone: boolean;
+          page: Array<{
+            _creationTime: number;
+            _id: string;
+            address: string;
+            channel: "email" | "sms" | "whatsapp";
+            createdAt: number;
+            reason: string;
+            sourceMessageId?: string;
+            testMode: boolean;
+          }>;
+          pageStatus?: "SplitRecommended" | "SplitRequired" | null;
+          splitCursor?: string | null;
+        },
+        Name
+      >;
+      remove: FunctionReference<
+        "mutation",
+        "internal",
+        { address: string; channel: "email" | "sms" | "whatsapp" },
+        boolean,
+        Name
+      >;
+    };
+    webhooks: {
+      receive: FunctionReference<
+        "action",
+        "internal",
+        {
+          callbackHandle?: string;
+          contentType: string;
+          rawBody: string;
+          signature?: string;
+        },
+        {
+          duplicate: boolean;
+          reason:
+            | "accepted"
+            | "duplicate"
+            | "invalid_signature"
+            | "missing_secret"
+            | "oversized_body"
+            | "invalid_payload";
+        },
+        Name
+      >;
+    };
+    whatsapp: {
+      sendTemplate: FunctionReference<
+        "mutation",
+        "internal",
+        {
           clientReference?: string;
           from: string;
           idempotencyKey?: string;
@@ -507,78 +585,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           templateKey?: string;
           testMode?: boolean;
           to: string;
+          zohoAgentId?: string;
         },
         string,
-        Name
-      >;
-      status: FunctionReference<
-        "query",
-        "internal",
-        {},
-        { configured: boolean; region: string; testMode: boolean },
-        Name
-      >;
-    };
-    suppressions: {
-      list: FunctionReference<
-        "query",
-        "internal",
-        {
-          channel: "email" | "sms" | "whatsapp";
-          paginationOpts: {
-            cursor: string | null;
-            endCursor?: string | null;
-            id?: number;
-            maximumBytesRead?: number;
-            maximumRowsRead?: number;
-            numItems: number;
-          };
-        },
-        {
-          continueCursor: string;
-          isDone: boolean;
-          page: Array<{
-            _creationTime: number;
-            _id: string;
-            address: string;
-            channel: "email" | "sms" | "whatsapp";
-            createdAt: number;
-            reason: string;
-            sourceMessageId?: string;
-          }>;
-          pageStatus?: "SplitRecommended" | "SplitRequired" | null;
-          splitCursor?: string | null;
-        },
-        Name
-      >;
-      remove: FunctionReference<
-        "mutation",
-        "internal",
-        { address: string; channel: "email" | "sms" | "whatsapp" },
-        boolean,
-        Name
-      >;
-    };
-    webhooks: {
-      receive: FunctionReference<
-        "action",
-        "internal",
-        {
-          callbackHandle?: string;
-          contentType: string;
-          rawBody: string;
-          signature?: string;
-        },
-        {
-          duplicate: boolean;
-          reason:
-            | "accepted"
-            | "duplicate"
-            | "invalid_signature"
-            | "missing_secret"
-            | "oversized_body"
-            | "invalid_payload";
-        },
         Name
       >;
     };

@@ -3,14 +3,14 @@ import { v } from "convex/values";
 
 export default defineSchema({
   webhookEvents: defineTable({
-    providerEventId: v.optional(v.string()),
+    zohoEventId: v.optional(v.string()),
     type: v.string(),
     recipient: v.optional(v.string()),
     occurredAt: v.number(),
     channel: v.optional(v.string()),
     messageId: v.optional(v.string()),
     ambiguous: v.optional(v.boolean()),
-  }).index("by_providerEventId", ["providerEventId"]),
+  }).index("by_zohoEventId", ["zohoEventId"]),
   webhookCallbackControl: defineTable({
     key: v.string(),
     fail: v.boolean(),

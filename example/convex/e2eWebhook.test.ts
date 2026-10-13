@@ -44,7 +44,7 @@ test("e2e capture route is session gated and records signed delivery plus replay
   expect(attempts[0]?.rawBody).toBe(body);
   expect(attempts[0]?.signature).toBe(headers["producer-signature"]);
   const callbacks = await t.query(internal.example.e2eCallbacksFor, {
-    providerEventId: "e2e-route-test",
+    zohoEventId: "e2e-route-test",
   });
   expect(callbacks).toMatchObject([{ type: "open" }]);
   const firstId = attempts[0]?._id;

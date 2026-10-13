@@ -6,11 +6,8 @@ import { channelValidator } from "./validators.js";
 
 export const maxWebhookBodyBytes = 512 * 1024;
 
-export function webhookReceiptRetentionMs(configuredDays: string | undefined): number {
-  const configured = Number(configuredDays);
-  const days =
-    Number.isSafeInteger(configured) && configured >= 1 && configured <= 3650 ? configured : 30;
-  return Math.max(days, 30) * 86_400_000;
+export function webhookReceiptRetentionMs(retentionDays: number): number {
+  return Math.max(retentionDays, 30) * 86_400_000;
 }
 
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -90,7 +87,7 @@ export async function verifyWebhookSignature(
   const decoded = decodedBody(rawBody);
   if (!signature) return null;
   // Zoho signs URL-decoded form bodies. A signed body that is not a supported form or JSON shape
-  // still authenticates as exact text, so it can be acknowledged and recorded as a failed receipt.
+  // still authenticates as exact textbody, so it can be acknowledged and recorded as a failed receipt.
   const body = decoded ?? rawBody;
   if (currentSecret && (await verifyWith(currentSecret, body, signature))) return body;
   if (previousSecret && (await verifyWith(previousSecret, body, signature))) return body;
@@ -124,18 +121,20 @@ export const webhookEventTypeValidator = v.union(
   v.literal("failed"),
   v.literal("unknown"),
 );
+/** A Zoho event category used to update or observe an outbound message. */
 export type WebhookEventType = Infer<typeof webhookEventTypeValidator>;
 export const normalizedWebhookEventValidator = v.object({
-  providerEventId: v.string(),
+  zohoEventId: v.string(),
   type: webhookEventTypeValidator,
   channel: v.union(channelValidator, v.literal("unknown")),
   recipient: v.optional(v.string()),
-  providerRequestId: v.optional(v.string()),
-  providerMessageId: v.optional(v.string()),
+  zohoRequestId: v.optional(v.string()),
+  zohoMessageId: v.optional(v.string()),
   clientReference: v.optional(v.string()),
   occurredAt: v.number(),
   raw: v.any(),
 });
+/** A verified provider event normalized for stored-message correlation. */
 export type NormalizedWebhookEvent = Infer<typeof normalizedWebhookEventValidator>;
 
 const eventTypes: Record<string, WebhookEventType> = {
@@ -213,7 +212,7 @@ function occurredAt(message: JSONObject, nowMs: number): number {
 export function parseWebhookBody(
   signedBody: string,
   nowMs = Date.now(),
-): { providerEventId: string; events: NormalizedWebhookEvent[] } | null {
+): { zohoEventId: string; events: NormalizedWebhookEvent[] } | null {
   let value: unknown;
   try {
     value = JSON.parse((decodedBody(signedBody) ?? "").replace(/^\uFEFF/, "").trim());
@@ -221,8 +220,8 @@ export function parseWebhookBody(
     return null;
   }
   const payload = object(value);
-  const providerEventId = string(payload?.webhook_request_id);
-  if (!payload || !providerEventId || providerEventId.length > 256) return null;
+  const zohoEventId = string(payload?.webhook_request_id);
+  if (!payload || !zohoEventId || zohoEventId.length > 256) return null;
   const names = Array.isArray(payload.event_name) ? payload.event_name : [payload.event_name];
   const messages = Array.isArray(payload.event_message)
     ? payload.event_message
@@ -252,20 +251,20 @@ export function parseWebhookBody(
         recipient = undefined;
       }
     }
-    const providerRequestId = string(payload.request_id);
-    const providerMessageId = string(emailInfo?.email_reference) ?? string(message.message_id);
+    const zohoRequestId = string(payload.request_id);
+    const zohoMessageId = string(emailInfo?.email_reference) ?? string(message.message_id);
     const clientReference = string(emailInfo?.client_reference) ?? string(message.client_reference);
     events.push({
-      providerEventId,
+      zohoEventId,
       type,
       channel,
       ...(recipient ? { recipient } : {}),
-      ...(providerRequestId ? { providerRequestId } : {}),
-      ...(providerMessageId ? { providerMessageId } : {}),
+      ...(zohoRequestId ? { zohoRequestId } : {}),
+      ...(zohoMessageId ? { zohoMessageId } : {}),
       ...(clientReference ? { clientReference } : {}),
       occurredAt: occurredAt(message, nowMs),
       raw: { event_name: names[index] ?? names[0], event_message: message },
     });
   }
-  return { providerEventId, events };
+  return { zohoEventId, events };
 }

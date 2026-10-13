@@ -1,5 +1,5 @@
 import { boundedPayload, boundedString } from "./bounds.js";
-import { zohoError } from "./errors.js";
+import { zohoCpaasError } from "./errors.js";
 import { v, type Infer } from "convex/values";
 import {
   attachmentValidator,
@@ -15,6 +15,7 @@ export const regionValidator = v.union(
   v.literal("jp"),
   v.literal("cn"),
 );
+/** A Zoho data-center region selecting the provider endpoint. */
 export type Region = Infer<typeof regionValidator>;
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -32,38 +33,43 @@ export function isRegion(value: string): value is Region {
 }
 
 export function regionBaseUrl(region: string | undefined, override?: string): string {
-  if (override) {
-    const url = new URL(override);
+  if (override !== undefined) {
+    let url: URL;
+    try {
+      url = new URL(override);
+    } catch {
+      throw zohoCpaasError("ZOHO_CPAAS_NOT_CONFIGURED");
+    }
     if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
-      throw zohoError("ZOHO_CPAAS_INVALID_CONFIG");
+      throw zohoCpaasError("ZOHO_CPAAS_NOT_CONFIGURED");
     }
     return url.href.replace(/\/$/, "");
   }
   if (!region) return hosts.us;
   if (isRegion(region)) return hosts[region];
-  throw zohoError("ZOHO_CPAAS_UNSUPPORTED_REGION");
+  throw zohoCpaasError("ZOHO_CPAAS_NOT_CONFIGURED");
 }
 
 export function normalizeToken(token: string): string {
   const stripped = token
     .trim()
-    .replace(/^Zoho-enczapikey\s+/i, "")
+    .replace(/^Zoho-enczapikey(?:\s+|$)/i, "")
     .trim();
-  if (!stripped || /\s/.test(stripped)) throw zohoError("ZOHO_CPAAS_INVALID_CONFIG");
+  if (!stripped || /\s/.test(stripped)) throw zohoCpaasError("ZOHO_CPAAS_NOT_CONFIGURED");
   return `Zoho-enczapikey ${stripped}`;
 }
 
 export function normalizeEmail(address: string): string {
   const normalized = address.trim().toLowerCase();
   if (normalized.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+    throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   }
   return normalized;
 }
 
 export function normalizePhone(number: string): string {
   const digits = number.replace(/[\s()+-]/g, "");
-  if (!/^\d{8,15}$/.test(digits)) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  if (!/^\d{8,15}$/.test(digits)) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   return digits;
 }
 
@@ -75,15 +81,20 @@ export function normalizeRecipient(channel: "email" | "sms" | "whatsapp", addres
       : normalizePhone(address);
 }
 
+/** An email address with an optional display name. */
 export type EmailAddress = Infer<typeof emailAddressValidator>;
+/** An email batch recipient with optional template merge values. */
 export type EmailRecipient = Infer<typeof emailRecipientValidator>;
+/** An email attachment supplied as base64 content or a file-cache key. */
 export type EmailAttachment = Infer<typeof attachmentValidator>;
+/** An email inline image identified by its content ID. */
 export type InlineImage = Infer<typeof inlineImageValidator>;
+/** The email content and addressing fields encoded in a Zoho request. */
 export type EmailInput = {
   from: EmailAddress;
   subject?: string;
-  html?: string;
-  text?: string;
+  htmlbody?: string;
+  textbody?: string;
   templateKey?: string;
   templateAlias?: string;
   mergeInfo?: Record<string, string>;
@@ -103,20 +114,20 @@ const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 
 export function validateUploadFile(name: string, mimeType: string, byteLength: number): void {
   if (!name || name.length > 150 || !mimeType || byteLength > MAX_UPLOAD_BYTES)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+    throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
 }
 
 function providerAddress(input: EmailAddress): EmailAddress {
-  if (input.name && input.name.length > 250) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  if (input.name && input.name.length > 250) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   const address = input.address.trim();
   normalizeEmail(address);
   return { address, ...(input.name ? { name: input.name } : {}) };
 }
 
 function recipients(input: EmailAddress[]) {
-  if (input.length > MAX_RECIPIENTS) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  if (input.length > MAX_RECIPIENTS) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   const unique = new Set(input.map((item) => normalizeEmail(item.address)));
-  if (unique.size !== input.length) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  if (unique.size !== input.length) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   return input.map((item) => ({ email_address: providerAddress(item) }));
 }
 
@@ -128,17 +139,17 @@ function media(input: EmailAttachment[] | InlineImage[] | undefined) {
   if (!input) return undefined;
   return input.map((item) => {
     if (("name" in item && item.name.length > 150) || ("cid" in item && !item.cid))
-      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+      throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
     const content = item.content?.replace(/\s+/g, "");
     if (Boolean(content) === Boolean(item.fileCacheKey)) {
-      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+      throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
     }
     if (
       content &&
       (!item.mimeType ||
         !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(content))
     ) {
-      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+      throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
     }
     const key = "name" in item ? { name: item.name } : { cid: item.cid };
     return {
@@ -160,7 +171,7 @@ export function buildEmailPayload(
   const first = to[0];
   const batch = first !== undefined && isBatchRecipient(first);
   if (to.some((item) => isBatchRecipient(item) !== batch))
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+    throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   const normalizedTo = to.map((item) =>
     isBatchRecipient(item)
       ? {
@@ -175,27 +186,31 @@ export function buildEmailPayload(
     new Set(normalizedTo.map((item) => normalizeEmail(item.email_address.address))).size !==
     normalizedTo.length
   )
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
-  if (normalizedTo.length > MAX_RECIPIENTS) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+    throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
+  if (normalizedTo.length > MAX_RECIPIENTS) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   if (normalizedTo.length === 0 && !input.cc?.length && !input.bcc?.length) {
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+    throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   }
-  if (input.subject && input.subject.length > 500) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  if (input.subject && input.subject.length > 500)
+    throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   if ((input.attachments?.length ?? 0) + (input.inlineImages?.length ?? 0) > 60)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
-  if (input.templateKey && input.templateAlias) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
-  if ((input.templateKey || input.templateAlias) && (input.subject || input.html || input.text)) {
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+    throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
+  if (input.templateKey && input.templateAlias) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
+  if (
+    (input.templateKey || input.templateAlias) &&
+    (input.subject || input.htmlbody || input.textbody)
+  ) {
+    throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   }
   if (
     !input.templateKey &&
     !input.templateAlias &&
-    (!input.subject || (!input.html && !input.text))
+    (!input.subject || (!input.htmlbody && !input.textbody))
   ) {
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+    throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   }
   const ref = input.clientReference ?? clientReference;
-  if (!ref || ref.length > 100) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  if (!ref || ref.length > 100) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   const payload: Record<string, unknown> = {
     from: providerAddress(input.from),
     to: normalizedTo,
@@ -208,8 +223,8 @@ export function buildEmailPayload(
     payload.reply_to = input.replyTo.map(providerAddress);
   }
   if (input.subject) payload.subject = input.subject;
-  if (input.html) payload.htmlbody = input.html;
-  if (input.text) payload.textbody = input.text;
+  if (input.htmlbody) payload.htmlbody = input.htmlbody;
+  if (input.textbody) payload.textbody = input.textbody;
   if (input.templateKey) payload.template_key = input.templateKey;
   if (input.templateAlias) payload.template_alias = input.templateAlias;
   if (input.mergeInfo) payload.merge_info = input.mergeInfo;
@@ -231,6 +246,7 @@ export function isIndiaBaseUrl(override: string | undefined): boolean {
   }
 }
 
+/** The template identifiers and merge values encoded in a Zoho request. */
 export type TemplateInput = {
   to: string;
   templateKey?: string;
@@ -242,10 +258,10 @@ export type TemplateInput = {
 function assertJsonDepth(value: JsonValue, remaining: number): void {
   if (value === null || typeof value !== "object") {
     if (typeof value === "number" && !Number.isFinite(value))
-      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+      throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
     return;
   }
-  if (remaining === 0) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  if (remaining === 0) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   if (Array.isArray(value)) {
     for (const item of value) assertJsonDepth(item, remaining - 1);
   } else {
@@ -256,15 +272,15 @@ function assertJsonDepth(value: JsonValue, remaining: number): void {
 function template(input: TemplateInput, clientReference: string) {
   boundedString(input.templateKey, 200);
   if (Boolean(input.templateKey) === Boolean(input.templateAlias)) {
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+    throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   }
   if (input.templateAlias && input.templateAlias.length > 100)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+    throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   if (input.mergeInfo) {
     for (const value of Object.values(input.mergeInfo)) assertJsonDepth(value, 3);
   }
   const ref = input.clientReference ?? clientReference;
-  if (!ref || ref.length > 100) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  if (!ref || ref.length > 100) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   return {
     ...(input.templateKey
       ? { template_key: input.templateKey }
@@ -279,9 +295,9 @@ export function buildSmsPayload(
   clientReference: string,
 ) {
   if (!input.senderKey || input.senderKey.length > 200)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+    throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   const to = normalizePhone(input.to);
-  if (!/^91\d{10}$/.test(to)) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  if (!/^91\d{10}$/.test(to)) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   const payload = {
     sender_key: input.senderKey,
     to: [{ mobile_no: to }],
@@ -292,18 +308,18 @@ export function buildSmsPayload(
 }
 
 export function buildWhatsappPayload(
-  input: TemplateInput & { from: string; agentId?: string },
+  input: TemplateInput & { from: string; zohoAgentId?: string },
   clientReference: string,
 ) {
-  boundedString(input.agentId, 200);
+  boundedString(input.zohoAgentId, 200);
   const from = `+${normalizePhone(input.from)}`;
   const to = `+${normalizePhone(input.to)}`;
-  if (from.length > 20 || to.length > 20) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  if (from.length > 20 || to.length > 20) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   const payload = {
     from,
     to,
     ...template(input, clientReference),
-    ...(input.agentId ? { agent_id: input.agentId } : {}),
+    ...(input.zohoAgentId ? { agent_id: input.zohoAgentId } : {}),
   };
   boundedPayload(payload);
   return payload;

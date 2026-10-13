@@ -16,7 +16,7 @@ import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { action, env, internalMutation, type MutationCtx } from "./_generated/server.js";
 import schema from "./schema.js";
-import { resolveTestMode } from "./config.js";
+import { readConfig, resolveTestMode } from "./config.js";
 import { sha256Hex } from "../shared/crypto.js";
 
 const eventValidator = normalizedWebhookEventValidator;
@@ -62,10 +62,8 @@ async function applyEvent(
 ): Promise<Doc<"messages">> {
   const next = nextStatus(event);
   const patch: Partial<Doc<"messages">> = {};
-  if (event.providerRequestId && !message.providerRequestId)
-    patch.providerRequestId = event.providerRequestId;
-  if (event.providerMessageId && !message.providerMessageId)
-    patch.providerMessageId = event.providerMessageId;
+  if (event.zohoRequestId && !message.zohoRequestId) patch.zohoRequestId = event.zohoRequestId;
+  if (event.zohoMessageId && !message.zohoMessageId) patch.zohoMessageId = event.zohoMessageId;
   if (next && canTransitionStatus(message.status, next, message.channel)) {
     patch.status = next;
     patch.error = undefined;
@@ -131,6 +129,7 @@ async function addSuppression(
     .unique();
   if (!old)
     await ctx.db.insert("suppressions", {
+      testMode: message?.testMode ?? resolveTestMode(undefined),
       channel: "email",
       address,
       reason: event.type,
@@ -161,12 +160,8 @@ function compatible(
     row.channel === event.channel &&
     (!recipient || row.to === recipient) &&
     (!event.clientReference || row.clientReference === event.clientReference) &&
-    (!event.providerRequestId ||
-      !row.providerRequestId ||
-      row.providerRequestId === event.providerRequestId) &&
-    (!event.providerMessageId ||
-      !row.providerMessageId ||
-      row.providerMessageId === event.providerMessageId)
+    (!event.zohoRequestId || !row.zohoRequestId || row.zohoRequestId === event.zohoRequestId) &&
+    (!event.zohoMessageId || !row.zohoMessageId || row.zohoMessageId === event.zohoMessageId)
   );
 }
 function selectMatch(
@@ -203,21 +198,19 @@ async function findMessage(
     ambiguous ||= result.ambiguous;
     return result.message;
   };
-  if (event.providerRequestId) {
+  if (event.zohoRequestId) {
     const addresses = recipient ? [recipient] : envelopeRecipients(event);
     if (addresses.length > 1) ambiguous = true;
     if (addresses.length === 1) {
       const address = addresses[0];
       if (address) {
-        const rows = await lookup(
-          ["request", event.channel, event.providerRequestId, address],
-          () =>
-            ctx.db
-              .query("messages")
-              .withIndex("by_providerRequestId_and_to", (q) =>
-                q.eq("providerRequestId", event.providerRequestId).eq("to", address),
-              )
-              .take(2),
+        const rows = await lookup(["request", event.channel, event.zohoRequestId, address], () =>
+          ctx.db
+            .query("messages")
+            .withIndex("by_zohoRequestId_and_to", (q) =>
+              q.eq("zohoRequestId", event.zohoRequestId).eq("to", address),
+            )
+            .take(2),
         );
         const message = consider(rows);
         if (message) return { message, ambiguous: false };
@@ -239,13 +232,11 @@ async function findMessage(
     const message = consider(rows);
     if (message) return { message, ambiguous: false };
   }
-  if (event.providerMessageId) {
-    const rows = await lookup(["message", event.providerMessageId], () =>
+  if (event.zohoMessageId) {
+    const rows = await lookup(["message", event.zohoMessageId], () =>
       ctx.db
         .query("messages")
-        .withIndex("by_providerMessageId", (q) =>
-          q.eq("providerMessageId", event.providerMessageId),
-        )
+        .withIndex("by_zohoMessageId", (q) => q.eq("zohoMessageId", event.zohoMessageId))
         .take(2),
     );
     const message = consider(rows);
@@ -256,7 +247,7 @@ async function findMessage(
 
 export const commit = internalMutation({
   args: {
-    providerEventId: v.string(),
+    zohoEventId: v.string(),
     bodyHash: v.string(),
     events: v.array(eventValidator),
     callbackHandle: v.optional(v.string()),
@@ -265,8 +256,8 @@ export const commit = internalMutation({
   handler: async (ctx, args) => {
     const old = await ctx.db
       .query("webhookReceipts")
-      .withIndex("by_providerEventId_and_reason", (q) =>
-        q.eq("providerEventId", args.providerEventId).eq("reason", undefined),
+      .withIndex("by_zohoEventId_and_reason", (q) =>
+        q.eq("zohoEventId", args.zohoEventId).eq("reason", undefined),
       )
       .unique();
     if (old) return { duplicate: true };
@@ -278,7 +269,8 @@ export const commit = internalMutation({
       .unique();
     if (sameBody) return { duplicate: true };
     await ctx.db.insert("webhookReceipts", {
-      providerEventId: args.providerEventId,
+      testMode: resolveTestMode(undefined),
+      zohoEventId: args.zohoEventId,
       bodyHash: args.bodyHash,
       createdAt: Date.now(),
     });
@@ -305,21 +297,21 @@ export const commit = internalMutation({
         type: event.type,
         occurredAt: event.occurredAt,
         receivedAt: Date.now(),
-        providerEventId: args.providerEventId,
+        zohoEventId: args.zohoEventId,
         raw: JSON.stringify(event.raw),
-        ...(event.providerRequestId ? { providerRequestId: event.providerRequestId } : {}),
-        ...(event.providerMessageId ? { providerMessageId: event.providerMessageId } : {}),
+        ...(event.zohoRequestId ? { zohoRequestId: event.zohoRequestId } : {}),
+        ...(event.zohoMessageId ? { zohoMessageId: event.zohoMessageId } : {}),
         ...(event.clientReference ? { clientReference: event.clientReference } : {}),
         ...(event.recipient ? { recipient: event.recipient } : {}),
         ambiguous,
-        ...(message?.testMode || resolveTestMode(undefined) ? { testMode: true } : {}),
+        testMode: message?.testMode ?? resolveTestMode(undefined),
       });
       if (message) {
         const updated = await applyEvent(ctx, event, message);
         for (const [key, entry] of cache) {
           if (
-            (entry.kind === "request" && updated.providerRequestId !== message.providerRequestId) ||
-            (entry.kind === "message" && updated.providerMessageId !== message.providerMessageId)
+            (entry.kind === "request" && updated.zohoRequestId !== message.zohoRequestId) ||
+            (entry.kind === "message" && updated.zohoMessageId !== message.zohoMessageId)
           )
             cache.delete(key);
           else
@@ -350,7 +342,7 @@ export async function reconcileRequestEvents(
 ): Promise<void> {
   const page = await paginator(ctx.db, schema)
     .query("events")
-    .withIndex("by_providerRequestId_and_recipient", (q) => q.eq("providerRequestId", requestId))
+    .withIndex("by_zohoRequestId_and_recipient", (q) => q.eq("zohoRequestId", requestId))
     .paginate({ cursor, numItems: 100, maximumRowsRead: 100, maximumBytesRead: 512 * 1024 });
   const messages: Doc<"messages">[] = [];
   for (const id of messageIds) {
@@ -366,13 +358,13 @@ export async function reconcileRequestEvents(
       raw = null;
     }
     const event: NormalizedWebhookEvent = {
-      providerEventId: stored.providerEventId,
+      zohoEventId: stored.zohoEventId,
       channel: stored.channel,
       type: recognizedEventType(stored.type),
       occurredAt: stored.occurredAt,
       recipient: stored.recipient,
-      providerRequestId: stored.providerRequestId,
-      providerMessageId: stored.providerMessageId,
+      zohoRequestId: stored.zohoRequestId,
+      zohoMessageId: stored.zohoMessageId,
       clientReference: stored.clientReference,
       raw,
     };
@@ -448,15 +440,16 @@ export const receive = action({
   }> => {
     if (new TextEncoder().encode(args.rawBody).byteLength > maxWebhookBodyBytes)
       return { duplicate: false, reason: "oversized_body" };
-    if (!env.ZOHO_CPAAS_WEBHOOK_SECRET && !env.ZOHO_CPAAS_WEBHOOK_SECRET_PREVIOUS)
+    const config = readConfig(env);
+    if (!config.webhookSecret && !config.webhookSecretPrevious)
       return { duplicate: false, reason: "missing_secret" };
     if (!args.signature || new TextEncoder().encode(args.signature).byteLength > 4096)
       return { duplicate: false, reason: "invalid_signature" };
     const signed = await verifyWebhookSignature(
       args.rawBody,
       args.signature,
-      env.ZOHO_CPAAS_WEBHOOK_SECRET,
-      env.ZOHO_CPAAS_WEBHOOK_SECRET_PREVIOUS,
+      config.webhookSecret,
+      config.webhookSecretPrevious,
     );
     if (signed === null) return { duplicate: false, reason: "invalid_signature" };
     const bodyHash = await sha256Hex(args.rawBody);
@@ -480,7 +473,7 @@ export const receive = action({
     if (parsed.events.length === 0 || parsed.events.every((event) => event.channel === "unknown"))
       return invalidPayload();
     const now = Date.now();
-    const oldestEvent = now - webhookReceiptRetentionMs(env.ZOHO_CPAAS_RETENTION_DAYS) + 86_400_000;
+    const oldestEvent = now - webhookReceiptRetentionMs(config.retentionDays) + 86_400_000;
     const latestEvent = now + 5 * 60 * 1000;
     if (
       parsed.events.some(
@@ -514,7 +507,8 @@ export const recordFailure = internalMutation({
       .unique();
     if (old) return { duplicate: false };
     await ctx.db.insert("webhookReceipts", {
-      providerEventId: `invalid:${args.bodyHash}`,
+      testMode: resolveTestMode(undefined),
+      zohoEventId: `invalid:${args.bodyHash}`,
       bodyHash: args.bodyHash,
       reason: args.reason,
       createdAt: Date.now(),

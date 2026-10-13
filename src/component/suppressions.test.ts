@@ -9,6 +9,7 @@ test("removing a suppression normalizes the address and rejects invalid input", 
   const t = convexTest(schema, modules);
   await t.run((ctx) =>
     ctx.db.insert("suppressions", {
+      testMode: false,
       channel: "email",
       address: "alice@example.test",
       reason: "hardbounce",
@@ -40,7 +41,7 @@ test("removing a suppression normalizes the address and rejects invalid input", 
       channel: "email",
       address: "not-an-email",
     }),
-  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_VALIDATION_FAILED" } });
+  ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
 });
 
 test("suppressions are listed and removed per channel with channel-specific normalization", async () => {
@@ -51,7 +52,13 @@ test("suppressions are listed and removed per channel with channel-specific norm
       ["whatsapp", "+919876543210"],
       ["email", "a@example.test"],
     ] as const)
-      await ctx.db.insert("suppressions", { channel, address, reason: "dnd", createdAt: 1 });
+      await ctx.db.insert("suppressions", {
+        testMode: false,
+        channel,
+        address,
+        reason: "dnd",
+        createdAt: 1,
+      });
   });
   const list = (channel: "sms" | "whatsapp" | "email") =>
     t.query(api.suppressions.list, { channel, paginationOpts: { numItems: 1, cursor: null } });
@@ -71,5 +78,5 @@ test("suppressions are listed and removed per channel with channel-specific norm
   for (const channel of ["sms", "whatsapp"] as const)
     await expect(
       t.mutation(api.suppressions.remove, { channel, address: "12" }),
-    ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_VALIDATION_FAILED" } });
+    ).rejects.toMatchObject({ data: { code: "ZOHO_CPAAS_INVALID_ARGUMENT" } });
 });

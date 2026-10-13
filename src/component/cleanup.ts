@@ -1,5 +1,6 @@
+import { readConfig } from "./config.js";
 import { v } from "convex/values";
-import { errorData } from "../shared/errors.js";
+import { createErrorData } from "../shared/error-data.js";
 import { webhookReceiptRetentionMs } from "../shared/webhook.js";
 import { env, internalMutation } from "./_generated/server.js";
 import { internal } from "./_generated/api.js";
@@ -13,11 +14,9 @@ export const run = internalMutation({
   args: {},
   returns: v.object({ deleted: v.number(), hasMore: v.boolean() }),
   handler: async (ctx) => {
-    const configured = Number(env.ZOHO_CPAAS_RETENTION_DAYS);
-    const days =
-      Number.isSafeInteger(configured) && configured >= 1 && configured <= 3650 ? configured : 30;
+    const { retentionDays } = readConfig(env);
     const now = Date.now();
-    const cutoff = now - days * DAY;
+    const cutoff = now - retentionDays * DAY;
     let remaining = BATCH;
     let deleted = 0;
     const jobsToFinalize: Id<"sendJobs">[] = [];
@@ -36,7 +35,7 @@ export const run = internalMutation({
         status: "unknown",
         terminalAt: now,
         failureDefinitive: false,
-        error: errorData("ZOHO_CPAAS_STUCK"),
+        error: createErrorData("ZOHO_CPAAS_STUCK"),
       });
       if (message.jobId && !jobsToFinalize.includes(message.jobId))
         jobsToFinalize.push(message.jobId);
@@ -149,7 +148,7 @@ export const run = internalMutation({
       const receipts = await ctx.db
         .query("webhookReceipts")
         .withIndex("by_createdAt", (q) =>
-          q.lt("createdAt", now - webhookReceiptRetentionMs(env.ZOHO_CPAAS_RETENTION_DAYS)),
+          q.lt("createdAt", now - webhookReceiptRetentionMs(retentionDays)),
         )
         .take(remaining);
       for (const receipt of receipts) {
