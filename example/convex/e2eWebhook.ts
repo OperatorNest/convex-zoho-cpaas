@@ -1,4 +1,3 @@
-// Maintainer capture route. It is active only during a local e2e session.
 import { createFunctionHandle } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { components, internal } from "./_generated/api.js";

@@ -13,11 +13,11 @@ const fresh = () => {
   return t;
 };
 
-function payload(eventId: string, name = "open", message: unknown = {}) {
+function payload(eventId: string, name = "open", message: Record<string, unknown> = {}) {
   return JSON.stringify({
     webhook_request_id: eventId,
     event_name: [name],
-    event_message: [message],
+    event_message: [{ occurred_at: Date.now(), ...message }],
   });
 }
 
@@ -66,6 +66,7 @@ test("callback failure rolls back receipt and event, then provider redelivery co
     event_name: ["hardbounce"],
     event_message: [
       {
+        occurred_at: Date.now(),
         email_info: {
           client_reference: messageId,
           to: [{ email_address: { address: "callback@example.test" } }],
@@ -115,9 +116,9 @@ test("verified malformed, unsupported, and over-event-limit bodies get hashed fa
   const manyEvents = JSON.stringify({
     webhook_request_id: "too-many",
     event_name: Array(501).fill("open"),
-    event_message: Array.from({ length: 501 }, () => ({ email_info: {} })),
+    event_message: Array.from({ length: 501 }, () => ({ occurred_at: Date.now(), email_info: {} })),
   });
-  const badContent = payload("bad-content", "open", { email_info: {} });
+  const badContent = payload("bad-content", "open", { occurred_at: Date.now(), email_info: {} });
   const invalidPayloads: Array<[string, string]> = [
     [missingId, "application/json"],
     [manyEvents, "application/json"],
@@ -127,13 +128,12 @@ test("verified malformed, unsupported, and over-event-limit bodies get hashed fa
     ["null", "application/json"],
   ];
   for (const [body, contentType] of invalidPayloads) {
-    // Keep invalid receipt creation sequential so each repeated body tests dedupe.
     expect((await post(t, body, { contentType })).status).toBe(200);
   }
   for (const [body, contentType] of invalidPayloads) {
     const duplicate = await post(t, body, { contentType });
     expect(duplicate.status).toBe(200);
-    expect(await duplicate.text()).toBe("Duplicate");
+    expect(await duplicate.text()).toBe("OK");
   }
 });
 
@@ -184,8 +184,14 @@ test("arrays are recorded as separate events and signed form and JSON decoding p
     marker: "raw space + encoded %2B",
     event_name: ["open", "click"],
     event_message: [
-      { email_info: { to: [{ email_address: { address: "a+b@example.test" } }] } },
-      { email_info: { to: [{ email_address: { address: "c@example.test" } }] } },
+      {
+        occurred_at: Date.now(),
+        email_info: { to: [{ email_address: { address: "a+b@example.test" } }] },
+      },
+      {
+        occurred_at: Date.now(),
+        email_info: { to: [{ email_address: { address: "c@example.test" } }] },
+      },
     ],
   });
   let signature = decodeURIComponent(await signWebhook(json));
@@ -195,7 +201,7 @@ test("arrays are recorded as separate events and signed form and JSON decoding p
   }
   expect(signature).toContain("+");
   const form = `data=${encodeURIComponent(json).replace(/%20/g, "+")}`;
-  // Base64 signatures may contain '+'. A literal plus in this header remains a plus.
+
   const literalPlus = signature.replace(/%2B/gi, "+");
   expect(
     (
@@ -213,7 +219,7 @@ test("arrays are recorded as separate events and signed form and JSON decoding p
 test("BOM and leading whitespace JSON verifies; concurrent duplicate deliveries commit once", async () => {
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
   const t = fresh();
-  const body = `\uFEFF  ${payload("concurrent", "open", { email_info: {} })}`;
+  const body = `\uFEFF  ${payload("concurrent", "open", { occurred_at: Date.now(), email_info: {} })}`;
   const signature = await signWebhook(body);
   const responses = await Promise.all(
     Array.from({ length: 8 }, () => post(t, body, { signature })),
@@ -243,6 +249,7 @@ test("open and click preserve message status while complaints suppress and mark 
       event_name: [type],
       event_message: [
         {
+          occurred_at: Date.now(),
           email_info: {
             client_reference: atOrThrow(id, 0),
             to: [{ email_address: { address: "person@example.test" } }],
@@ -260,6 +267,7 @@ test("open and click preserve message status while complaints suppress and mark 
     event_name: ["complaint"],
     event_message: [
       {
+        occurred_at: Date.now(),
         email_info: {
           client_reference: atOrThrow(id, 0),
           to: [{ email_address: { address: "person@example.test" } }],
@@ -306,6 +314,7 @@ test("bounce received while the provider request is sending survives later accep
     event_name: ["hardbounce"],
     event_message: [
       {
+        occurred_at: Date.now(),
         email_info: {
           client_reference: messageId,
           to: [{ email_address: { address: "sending-bounce@example.test" } }],
@@ -334,7 +343,7 @@ test("bounce received while the provider request is sending survives later accep
   });
 });
 
-test("provider request and envelope addresses resolve a unique cc or bcc message row", async () => {
+test("an explicit recipient conflicting with the envelope never changes the envelope recipient", async () => {
   vi.useFakeTimers();
   vi.stubEnv("ZOHO_CPAAS_TEST_MODE", "true");
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
@@ -356,6 +365,7 @@ test("provider request and envelope addresses resolve a unique cc or bcc message
     event_name: ["hardbounce"],
     event_message: [
       {
+        occurred_at: Date.now(),
         email_info: {
           to: [{ email_address: { address: "external@example.test" } }],
           cc: [{ email_address: { address: "primary@example.test" } }],
@@ -367,13 +377,13 @@ test("provider request and envelope addresses resolve a unique cc or bcc message
   expect((await post(t, body)).status).toBe(200);
   expect(
     await t.query(components.zohoCpaas.messages.getMessage, { messageId: atOrThrow(ids, 0) }),
-  ).toMatchObject({ status: "bounced" });
+  ).toMatchObject({ status: "accepted" });
   const suppressions = await t.query(components.zohoCpaas.suppressions.list, {
     channel: "email",
     paginationOpts: { numItems: 10, cursor: null },
   });
-  expect(suppressions.page.map((entry) => entry.address)).toContain("primary@example.test");
-  expect(suppressions.page.map((entry) => entry.address)).not.toContain("wrong@example.test");
+  expect(suppressions.page.map((entry) => entry.address)).not.toContain("primary@example.test");
+  expect(suppressions.page.map((entry) => entry.address)).toContain("wrong@example.test");
 });
 
 test("unique client reference resolves a multi-recipient batch envelope", async () => {
@@ -409,11 +419,12 @@ test("unique client reference resolves a multi-recipient batch envelope", async 
       event_name: [type],
       event_message: [
         {
+          occurred_at: Date.now(),
           email_info: { ...envelope, client_reference: targetId },
         },
       ],
     });
-    // Keep each signed delivery sequential so the expected row state is observable.
+
     expect((await post(t, body)).status).toBe(200);
   }
   expect(

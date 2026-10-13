@@ -1,4 +1,3 @@
-/** Signs a fixture using Zoho's URL-decoded webhook body convention. */
 export async function signWebhook(
   body: string,
   secret = "test-key",

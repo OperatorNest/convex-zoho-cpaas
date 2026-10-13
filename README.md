@@ -70,12 +70,12 @@ Run `pnpm exec convex codegen` after mounting. Set deployment values through Con
 | Variable                                                                      | Purpose                                                                                                     |
 | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `ZOHO_CPAAS_REGION`                                                           | `us` (default), `eu`, `in`, `au`, `jp`, or `cn`.                                                            |
-| `ZOHO_CPAAS_BASE_URL`                                                         | Optional HTTPS host override, including `.sa` and `.ca` legacy hosts.                                       |
-| `ZOHO_CPAAS_TOKEN`                                                            | Shared Agent token, bare or with `Zoho-enczapikey` prefix.                                                  |
+| `ZOHO_CPAAS_BASE_URL`                                                         | HTTPS endpoint override; absent uses the region host.                                                       |
+| `ZOHO_CPAAS_TOKEN`                                                            | Shared Agent token; absent requires a channel token or test mode.                                           |
 | `ZOHO_CPAAS_EMAIL_TOKEN`, `ZOHO_CPAAS_SMS_TOKEN`, `ZOHO_CPAAS_WHATSAPP_TOKEN` | Optional channel overrides of the shared token.                                                             |
-| `ZOHO_CPAAS_WEBHOOK_SECRET`, `ZOHO_CPAAS_WEBHOOK_SECRET_PREVIOUS`             | Current and previous webhook Authentication Keys.                                                           |
+| `ZOHO_CPAAS_WEBHOOK_SECRET`, `ZOHO_CPAAS_WEBHOOK_SECRET_PREVIOUS`             | Current and previous signing keys; absent makes webhooks fail closed.                                       |
 | `ZOHO_CPAAS_RETENTION_DAYS`                                                   | Terminal-record retention: `1`–`3650`, default `30`. Webhook receipts are kept at least 30 days regardless. |
-| `ZOHO_CPAAS_TEST_MODE`                                                        | Test-mode opt-in only when exactly `true`.                                                                  |
+| `ZOHO_CPAAS_TEST_MODE`                                                        | Disabled unless exactly `true`.                                                                             |
 
 ## Quick start
 
@@ -104,9 +104,13 @@ export const sendReceipt = internalMutation({
 });
 ```
 
-Email `to`, `cc`, and `bcc` use `{ address, name? }`; `replyTo` uses the same flat shape. A single send permits at most 500 addresses in each recipient field. A batch permits at most 500 total recipients and sends one provider request. Batch `to` entries use `{ emailAddress: { address, name? }, mergeInfo? }`. Each accepted recipient, including cc/bcc, gets a message row. Partially suppressed sends retain suppressed rows; a request with no eligible recipient raises `ZOHO_CPAAS_ALL_SUPPRESSED`. Inline sends require `subject` and `html` or `text`; template sends require a `templateKey` or `templateAlias`.
+Email addresses use `{ address, name? }`; batches use `{ emailAddress: { address, name? }, mergeInfo? }`. A single send allows 500 addresses per recipient field; a batch allows 500 across `to`, `cc`, and `bcc`. Every requested recipient gets a row when the request succeeds, including suppressed recipients. At least one `to` must remain eligible when `cc` or `bcc` remains eligible; otherwise the request raises `ZOHO_CPAAS_VALIDATION_FAILED`. A request with every recipient suppressed raises `ZOHO_CPAAS_ALL_SUPPRESSED`. Each attempt rechecks suppressions before marking eligible messages `sending`.
 
-Attachments use `{ name, mimeType?, content?, fileCacheKey? }`; base64 `content` requires `mimeType`. Inline images use `{ cid, mimeType?, content?, fileCacheKey? }` and HTML `cid:<cid>`. `email.uploadFile(ctx, { name, mimeType, content })` takes an `ArrayBuffer` and returns a file-cache key. Inline base64 data is capped at 256 KiB; upload accepts at most Zoho's documented 15 MB, subject to Convex transport limits. SMS and WhatsApp `mergeInfo` accepts JSON values nested up to three container levels, within a 256 KiB request cap.
+Inline email requires `subject` and `html` or `text`. Templates require exactly one of `templateKey` and `templateAlias`. Attachments use `{ name, mimeType?, content?, fileCacheKey? }`; inline images replace `name` with `cid`. Supply base64 `content` with `mimeType`, or a `fileCacheKey`. The complete JSON-encoded send payload, including media and merge values, is capped at 256 KiB. Upload larger media with `email.uploadFile(ctx, { name, mimeType, content })`; `content` is an `ArrayBuffer`, capped at 15 MiB subject to Convex transport limits. The return value is a file-cache key.
+
+Client options default to no `defaultFrom`, no `onEvent`, and no test-mode opt-in. An email call's `from` overrides `defaultFrom`; one must exist. `testMode: true` or component env `ZOHO_CPAAS_TEST_MODE === "true"` enables simulation; caller objects cannot override the constructor's `testMode`. `onEvent` is an internal mutation called in the receipt transaction. Route `path` defaults to `/zoho-cpaas/webhook`.
+
+Optional tracking flags, reply addresses, headers, merge values, media, template identifiers, and agent IDs are omitted from the provider request when absent. `clientReference` defaults to a generated message ID; batches use per-recipient `__onx_ref` substitutions unless a reference is supplied. `idempotencyKey` has no default and accepts 1–200 nonblank characters. Template keys, SMS sender keys, and WhatsApp agent IDs accept at most 200 characters; template aliases and client references accept at most 100.
 
 ## Webhooks
 
@@ -124,7 +128,7 @@ export default http;
 
 `registerRoutes(http, component, { path?, onEvent? })` takes a `path` of type `` `/${string}` `` and accepts an internal app mutation callback. The `ZohoCpaas` constructor can hold `onEvent`; then `client.registerRoutes(http, { path? })` forwards it. The exact callback argument type is exported as `ZohoCpaasEventArgs`. The component invokes it in the receipt/event apply transaction. A throw rolls state back and returns 500 so Zoho can redeliver; callback logic must be safe per event.
 
-The route forwards raw body text and the `producer-signature` header. The component verifies base64 HMAC-SHA256 over Zoho's URL-decoded body using current or previous secret and constant-time comparison, then deduplicates by provider event ID and body hash. A missing or bad signature returns 401; missing secrets or callback failure return 500. A body above 512 KiB returns 413; malformed `Content-Length` or undecodable UTF-8 returns 400. A direct component `webhooks.receive` call returns only `{ reason, duplicate }`, including `reason: "oversized_body"` when its body exceeds the same limit. Correctly signed events, including unusable payloads stored as failed receipts, return 200. The parser accepts JSON and form-encoded JSON and limits expanded events to 500 and 256 KiB. The unsigned timestamp gets a 24-hour freshness window and five minutes of future skew.
+The route forwards raw body text and the `producer-signature` header. The component verifies base64 HMAC-SHA256 over Zoho's URL-decoded body using current or previous secret and constant-time comparison, then deduplicates by provider event ID and body hash. A missing or bad signature returns 401; missing secrets or callback failure return 500. A body above 512 KiB returns 413; malformed `Content-Length` or undecodable UTF-8 returns 400. A direct component `webhooks.receive` call returns only `{ reason, duplicate }`, including `reason: "oversized_body"` when its body exceeds the same limit. Correctly signed events within the signed-event freshness bound, including unusable payloads stored as failed receipts, return 200. Only committed bodies deduplicate; a failed receipt never blocks a later valid delivery of the same body. The parser accepts JSON and form-encoded JSON and limits expanded events to 500 and 256 KiB. The unsigned timestamp gets a 24-hour freshness window and five minutes of future skew.
 
 ## API reference
 
@@ -143,51 +147,47 @@ All client methods take `(ctx, args)` with an args object. Function references u
 | `messages.get(ctx, { messageId })`                                      | `messages.getMessage`           | Message row or null.                |
 | `messages.list(ctx, { recipient?, channel?, status?, paginationOpts })` | `messages.listMessages`         | Paginated messages.                 |
 | `messages.listEvents(ctx, { messageId, paginationOpts })`               | `messages.listEvents`           | Paginated events.                   |
-| `messages.cancel(ctx, { messageId })`                                   | `messages.cancel`               | Cancels queued message.             |
+| `messages.cancel(ctx, { messageId })`                                   | `messages.cancel`               | Stops a pending attempt.            |
 | `suppressions.list(ctx, { channel, paginationOpts })`                   | `suppressions.list`             | Paginated suppressions.             |
 | `suppressions.remove(ctx, { channel, address })`                        | `suppressions.remove`           | Removes a normalized address.       |
 | `registerRoutes(http, component, options?)`                             | `webhooks.receive`              | Registers verified webhook route.   |
 | `client.registerRoutes(http, { path? })`                                | `webhooks.receive`              | Uses constructor callback.          |
 
-List methods take Convex `paginationOpts: { numItems, cursor }` and use `paginator` from `convex-helpers/server/pagination`; wrap them with `convex-helpers/react`'s `usePaginatedQuery` in React apps. `messages.list` filters by exactly one of `recipient` or `status`. A `recipient` filter requires an explicit `channel` (`email`, `sms`, or `whatsapp`) and is normalized with that channel's rules, the same representation used on write (email lowercased, SMS digits only, WhatsApp `+` plus digits); the channel is never guessed from the address, and `channel` without `recipient` is rejected. Query WhatsApp as `channel: "whatsapp"` with or without a leading `+`, and SMS as `channel: "sms"` likewise. Email accepts optional cc/bcc/reply-to, tracking flags, `clientReference`, `mimeHeaders`, attachments, inline images, and `idempotencyKey`. There is no Zoho send idempotency header. The request digest is computed over key-sorted JSON, so argument key order never causes a false `ZOHO_CPAAS_IDEMPOTENCY_CONFLICT`. Local deduplication lasts only while the send-job ledger remains: within that window, a key may create a new job after every prior non-suppressed message definitively failed or was canceled (suppressed rows are ignored for this decision), while unknown outcomes stay deduplicated. After a finished job is swept at the retention cutoff, its key has no deduplication record; do not replay an old ambiguous send without first resolving its provider outcome. A batch uses reserved `__onx_ref` merge data for per-recipient references unless a caller supplies `clientReference`.
+`messages.list` accepts exactly one of `recipient` or `status`; `recipient` requires `channel`, while `status` forbids it. Email addresses are lowercased, SMS numbers contain digits only, and WhatsApp numbers use `+` followed by digits. Pages accept 1–100 items and Convex-helper cursors, including `endCursor`; every page reads at most `numItems + 1` rows.
 
-Root exports are limited to what an app needs: the `ZohoCpaas` class, `registerRoutes`, `isZohoCpaasError`, the types `Message`, `MessageEvent`, `Suppression`, `Channel`, `MessageStatus`, `EmailAddress`, `EmailAttachment`, `InlineImage`, `Region`, the send argument and option types, `ZohoCpaasEventArgs`, `ZohoCpaasErrorCode` and `ZohoCpaasMessageErrorCode`, and the validators `emailAddressValidator`, `attachmentValidator`, `inlineImageValidator`, `channelValidator`, `statusValidator`, `regionValidator` and `normalizedWebhookEventValidator`. Use the last to declare the `event` field of your `onEvent` callback arguments (`{ event: normalizedWebhookEventValidator, messageId: v.optional(v.string()), ambiguous: v.boolean() }`). Provider parsing, signature verification, and error classification are internal and not part of the public API. `MessageEvent.raw` is a provider passthrough diagnostic field; do not treat or index it as trusted state.
+Idempotency hashes key-sorted request JSON. A changed request under the same key raises `ZOHO_CPAAS_IDEMPOTENCY_CONFLICT`. A new job may reuse a key only when every prior non-suppressed recipient definitively failed or was canceled before any uncertain attempt. Unknown outcomes remain deduplicated until job retention removes the ledger. Zoho has no send idempotency header.
 
-## Error codes
+Transport failures record `unknown`. Email may retry them up to five attempts and can send duplicates when a response was lost. SMS and WhatsApp never automatically resend unknown outcomes; they retry explicit 429 or 503 rejections with a code in the package’s known Zoho code lists. An unrecognized body code does not make a 5xx failure definitive. Caught action failures before the HTTP request starts are definitive failures and permit a new send under the same idempotency key. Signed webhooks can resolve `unknown` and survive a later uncertain completion. Canceling queued work or an email awaiting retry stops future attempts; `canceledAt` records cancellation, while an uncertain outcome stays `unknown` until a webhook resolves it. Cancellation cannot undo a provider request.
 
-Errors are `ConvexError<{ code: ZohoCpaasErrorCode; message: string; retryable?: boolean }>`; `message` is sanitized and does not include secrets or provider bodies. Use `isZohoCpaasError(error)` to narrow them. Failures stored on message rows use a separate set of codes, listed under [Stored message error codes](#stored-message-error-codes).
+Webhook matching requires compatible channel, recipient, and identifiers. Events in one body use message identifiers and state written by earlier events in that transaction. Ambiguous envelopes remain unresolved. Client-reference lookups include channel and recipient; early events reconcile in scheduled batches of at most 100 rows with a 512 KiB read budget.
 
-| Code                              | Meaning                                                                |
-| --------------------------------- | ---------------------------------------------------------------------- |
-| `ZOHO_CPAAS_VALIDATION_FAILED`    | Invalid send input, recipient, attachment, or webhook callback option. |
-| `ZOHO_CPAAS_NOT_CONFIGURED`       | Channel token missing without test-mode opt-in.                        |
-| `ZOHO_CPAAS_INVALID_CONFIG`       | Invalid token, base URL, or other component setting.                   |
-| `ZOHO_CPAAS_UNSUPPORTED_REGION`   | Channel unavailable in the selected region.                            |
-| `ZOHO_CPAAS_IDEMPOTENCY_CONFLICT` | Same idempotency key used with different request content.              |
-| `ZOHO_CPAAS_ALL_SUPPRESSED`       | No eligible email recipient remains.                                   |
-| `ZOHO_CPAAS_UPLOAD_FAILED`        | Provider file-cache upload failed.                                     |
+## Errors
 
-### Stored message error codes
+Thrown errors and `message.error` use `{ code, message, providerStatus?, providerCode? }`. Each code has the fixed sentence below. `providerStatus` is an HTTP status; `providerCode` is a Zoho code of at most 64 characters. Provider descriptions, response bodies, recipients, and message content never enter errors. `isZohoCpaasError(error)` validates the thrown error's code, message type, and optional provider fields. Retry classification stays internal. Send functions rethrow non-package errors unchanged.
 
-`message.error.code` (typed `string`) and `message.warning` hold per-message codes recorded by the send pipeline. They are never thrown. `ZohoCpaasMessageErrorCode` types the values the component itself writes plus the recognized Zoho codes; Zoho may return other well-formed codes, which are stored verbatim.
+| Code                                   | Fixed message                                                 |
+| -------------------------------------- | ------------------------------------------------------------- |
+| `ZOHO_CPAAS_VALIDATION_FAILED`         | An argument is invalid, missing or out of bounds.             |
+| `ZOHO_CPAAS_NOT_CONFIGURED`            | The channel token is missing and test mode is disabled.       |
+| `ZOHO_CPAAS_INVALID_CONFIG`            | A component setting is invalid.                               |
+| `ZOHO_CPAAS_UNSUPPORTED_REGION`        | The channel is unavailable at the configured endpoint.        |
+| `ZOHO_CPAAS_IDEMPOTENCY_CONFLICT`      | The idempotency key identifies different request content.     |
+| `ZOHO_CPAAS_ALL_SUPPRESSED`            | All email recipients are suppressed.                          |
+| `ZOHO_CPAAS_UPLOAD_FAILED`             | The provider did not return a usable file cache key.          |
+| `ZOHO_CPAAS_PROVIDER_REJECTED`         | The provider rejected the request.                            |
+| `ZOHO_CPAAS_NETWORK_ERROR`             | The send request outcome is unknown.                          |
+| `ZOHO_CPAAS_WORKPOOL_ACTION_FAILED`    | The send action ended without reporting an outcome.           |
+| `ZOHO_CPAAS_RETRY_AFTER_TOO_LONG`      | The provider requested a retry delay longer than 24 hours.    |
+| `ZOHO_CPAAS_STUCK`                     | The send remained in progress for more than 24 hours.         |
+| `ZOHO_CPAAS_UNRECOGNIZED_SUCCESS_BODY` | The provider accepted the request without usable identifiers. |
 
-| Code                                    | Where                | Meaning                                                                      |
-| --------------------------------------- | -------------------- | ---------------------------------------------------------------------------- |
-| `ZOHO_CPAAS_STUCK`                      | `error.code`         | A send stayed `sending` for more than 24 hours; outcome is unknown.          |
-| `ZOHO_CPAAS_WORKPOOL_ACTION_FAILED`     | `error.code`         | The send action crashed or timed out before reporting an outcome.            |
-| `ZOHO_CPAAS_NETWORK_ERROR`              | `error.code`         | The request outcome is unknown (network failure or timeout).                 |
-| `ZOHO_CPAAS_RETRY_AFTER_TOO_LONG`       | `error.code`         | Zoho asked for a retry delay longer than 24 hours; not retried.              |
-| `ZOHO_CPAAS_NOT_CONFIGURED`             | `error.code`         | The channel token was unavailable when the job ran.                          |
-| `ZOHO_CPAAS_INVALID_CONFIG`             | `error.code`         | The base URL or token configuration was invalid when the job ran.            |
-| `ZOHO_CPAAS_UNSUPPORTED_REGION`         | `error.code`         | The configured region is not supported when the job ran.                     |
-| `ZOHO_CPAAS_UNRECOGNIZED_SUCCESS_BODY`  | `warning` (accepted) | Zoho returned 2xx with an unexpected body; the send is treated accepted.     |
-| Zoho codes such as `TM_4001`, `SMI_115` | `error.code`         | Provider rejection, with `error.class` and `error.retryable` classification. |
+The last code is stored in `message.warning` after an unrecognized 2xx response. Provider rejection codes appear in `providerCode` rather than replacing `code`.
 
 ## Testing
 
-Test mode is an explicit client option (`new ZohoCpaas(component, { testMode: true })`) or `ZOHO_CPAAS_TEST_MODE === "true"`. It creates `testMode: true` rows and synthetic provider identifiers without a Zoho call. Webhooks still need a signing secret. Without a channel token and opt-in, sends raise `ZOHO_CPAAS_NOT_CONFIGURED`.
+Test mode is an explicit client option (`new ZohoCpaas(component, { testMode: true })`) or `ZOHO_CPAAS_TEST_MODE === "true"`. It creates `testMode: true` rows and synthetic provider identifiers without a Zoho call. Simulation still enforces channel endpoints before execution; SMS requires an India endpoint. Webhooks still need a signing secret. Without a channel token and opt-in, sends raise `ZOHO_CPAAS_NOT_CONFIGURED`.
 
-Use the exported `register(t)` helper with `convex-test`; it registers the component and workpool child:
+Use the exported `register(t)` helper with `convex-test`; it registers the component and workpool child. Vitest transforms their TypeScript test entries without a `test.server.deps.inline` setting:
 
 ```ts
 import { register } from "@operatornest/convex-zoho-cpaas/test";
@@ -203,23 +203,25 @@ Stub `fetch`, use dummy `vi.stubEnv` values, and restore environment and fake ti
 
 ## Data retention
 
-A daily cron processes at most 200 cleanup candidates per batch. Default terminal-record retention is 30 days. It clears terminal job provider payloads while retaining request digests until finished jobs are deleted at the configured retention cutoff, regardless of whether a failure outcome was unknown. It also deletes old events and webhook receipts (receipts use the larger of the configured retention and 30 days), and sweeps old provider-state rows without `terminalAt` by `createdAt`. Queued work stays pending. A `sending` attempt older than 24 hours becomes failed. Suppressions persist until an authorized app call removes them. Reads use bounded pages.
+A daily cron processes at most 200 cleanup candidates per batch. Default terminal-record retention is 30 days. It clears terminal job provider payloads while retaining request digests until finished jobs are deleted at the configured retention cutoff, regardless of whether a failure outcome was unknown. It also deletes old events and webhook receipts (receipts use the larger of the configured retention and 30 days), and sweeps old provider-state rows without `terminalAt` by `createdAt`. Queued work stays pending. A `sending` attempt older than 24 hours becomes `unknown`. Suppressions persist until an authorized app call removes them.
 
 ## Known limitations
 
 - Live Zoho send and webhook capture have not validated token scopes, SMS and WhatsApp payload/status details, signature wire encoding, form field names, or exact event timestamps. The HMAC fixture validates the implementation's algorithm only.
-- Zoho's signature does not cover a timestamp. A captured request can be replayed with a fresh timestamp during receipt retention; event ID and body hash deduplication suppress duplicate application. Receipts are kept for at least 30 days, even when `ZOHO_CPAAS_RETENTION_DAYS` is smaller. After receipt expiry, there is no cryptographic replay bound.
-- SMS is India-only and requires DLT approval, sender association, and a pre-approved template. It has no webhook reconciliation and remains `accepted` after request acceptance. WhatsApp supports pre-approved Utility or Authentication templates; inbound, free-form, media, interactive, and batch sends are outside this component.
+- Zoho’s signature does not cover the header timestamp. Event ID and committed-body hash deduplication suppress replay during receipt retention; the signed-event freshness bound in Security rejects expired bodies after receipt deletion.
+- SMS rechecks that the effective HTTPS endpoint has an India `.in` hostname on every attempt and requires DLT approval, sender association, and a pre-approved template. It has no webhook reconciliation and remains `accepted` after request acceptance. WhatsApp supports pre-approved Utility or Authentication templates; inbound, free-form, media, interactive, and batch sends are outside this component.
 - Email has no delivered webhook. A successful send stays `accepted` unless a later failure event arrives; opens and clicks are events. Unknown multi-recipient webhook envelopes are retained as diagnostics rather than assigning one failure to all addresses.
 - Per-recipient batch `__onx_ref` substitution, Zoho rate limits, 429 behavior, full 15 MB upload in Convex transport, and the `.sa`/`.ca` host behavior still need live-account qualification. Workpool concurrency is fixed at 10.
 
-## Security notes
+## Security
 
-Authenticate and authorize app functions before calling the component. Keep credentials in component env, not args or tables. Webhook replay window: Zoho's signature does not cover a timestamp, so a captured, validly signed request can be resent. The component rejects stale unsigned timestamps (24 hours) and deduplicates by event ID and body hash for as long as the receipt exists, at least 30 days (`ZOHO_CPAAS_RETENTION_DAYS` values below 30 do not shorten receipt retention). Beyond that window a replay of an old body is not detectable; keep the webhook secret private and rotate it if it leaks. Treat raw webhook diagnostics as provider-controlled data and apply your data access policy before exposing them. Report issues through [private vulnerability reporting](https://github.com/OperatorNest/convex-zoho-cpaas/security/advisories/new); see [SECURITY.md](SECURITY.md).
+Webhook receipts are retained for `max(ZOHO_CPAAS_RETENTION_DAYS, 30)` days, with invalid retention settings using 30 days. Every event must have a usable timestamp in the signed body. A body with any event older than that receipt retention period minus one day, or more than five minutes in the future, returns 401 (`invalid_signature`) without storing a receipt or applying events. Missing or unusable event timestamps also fail this check. Changing the unsigned `ts` header cannot extend this bound.
+
+Authenticate and authorize app functions before calling the component. Credentials belong in component env. Restrict access to messages and provider-controlled raw events. Report vulnerabilities through [private reporting](https://github.com/OperatorNest/convex-zoho-cpaas/security/advisories/new); see [SECURITY.md](https://github.com/OperatorNest/convex-zoho-cpaas/blob/main/SECURITY.md).
 
 ## Development
 
-Use `.mise.toml` for Node 26 and pnpm 12.9.1. `pnpm build:codegen` generates bindings and builds the package; `pnpm check` runs formatting, build, lint, typecheck, Knip, and coverage tests; `pnpm smoke` tests the anonymous real runtime. See [CONTRIBUTING.md](CONTRIBUTING.md). The maintainer-run `pnpm e2e` workflow uses gitignored `.env.e2e` for real provider sends and webhook qualification; start with `pnpm e2e --dry-run`. It is never run in CI. `pnpm e2e:env` only loads component env values.
+Use `.mise.toml` for Node 24 and pnpm 12.9.1. `pnpm build:codegen` generates bindings and builds the package; `pnpm check` runs formatting, build, lint, typecheck, Knip, and coverage tests; `pnpm smoke` tests the anonymous real runtime. See [CONTRIBUTING.md](https://github.com/OperatorNest/convex-zoho-cpaas/blob/main/CONTRIBUTING.md). The maintainer-run `pnpm e2e` workflow uses gitignored `.env.e2e` for real provider sends and webhook qualification; start with `pnpm e2e --dry-run`. It is never run in CI. `pnpm e2e:env` only loads component env values.
 
 ## License
 

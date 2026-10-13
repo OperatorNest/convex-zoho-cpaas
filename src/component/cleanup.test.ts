@@ -11,7 +11,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-test("cleanup marks stuck sends failed, blanks terminal jobs, and drains bounded sweeps", async () => {
+test("cleanup marks stuck sends unknown, blanks terminal jobs, and drains bounded sweeps", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-04T00:00:00Z"));
   const t = convexTest(schema, modules);
@@ -137,12 +137,12 @@ test("cleanup marks stuck sends failed, blanks terminal jobs, and drains bounded
   expect(first).toMatchObject({ hasMore: true });
   const failed = await t.run((ctx) => ctx.db.get("messages", stuck));
   expect(failed).toMatchObject({
-    status: "failed",
+    status: "unknown",
     failureDefinitive: false,
-    error: { code: "ZOHO_CPAAS_STUCK", retryable: false },
+    error: { code: "ZOHO_CPAAS_STUCK" },
   });
   expect(await t.run((ctx) => ctx.db.get("messages", siblingStuck))).toMatchObject({
-    status: "failed",
+    status: "unknown",
     error: { code: "ZOHO_CPAAS_STUCK" },
   });
   expect(await t.run((ctx) => ctx.db.get("sendJobs", stuckJob))).toMatchObject({
@@ -404,7 +404,7 @@ test("a message is deleted only after its events fit in the batch budget", async
   }));
   await insertEvents(terminal, 250);
   await insertEvents(untimed, 250);
-  const eventCount = () => t.run(async (ctx) => (await ctx.db.query("events").collect()).length);
+  const eventCount = () => t.run(async (ctx) => (await ctx.db.query("events").take(1000)).length);
   const exists = async (id: Id<"messages">) =>
     (await t.run((ctx) => ctx.db.get("messages", id))) !== null;
 

@@ -69,7 +69,7 @@ test("listMessages normalizes WhatsApp and SMS phone recipients", async () => {
     channel: "sms",
     paginationOpts,
   });
-  // The channel decides normalization: no leading-plus inference.
+
   const whatsappNoPlus = await t.query(api.messages.listMessages, {
     recipient: "919876543210",
     channel: "whatsapp",

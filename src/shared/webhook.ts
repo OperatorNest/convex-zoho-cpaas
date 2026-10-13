@@ -6,6 +6,13 @@ import { channelValidator } from "./validators.js";
 
 export const maxWebhookBodyBytes = 512 * 1024;
 
+export function webhookReceiptRetentionMs(configuredDays: string | undefined): number {
+  const configured = Number(configuredDays);
+  const days =
+    Number.isSafeInteger(configured) && configured >= 1 && configured <= 3650 ? configured : 30;
+  return Math.max(days, 30) * 86_400_000;
+}
+
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
@@ -48,7 +55,6 @@ async function verifyWith(
   return crypto.subtle.verify("HMAC", key, signature, new TextEncoder().encode(body));
 }
 
-/** Returns the exact signed JSON text only after a valid signature and timestamp. */
 export async function verifyWebhookSignature(
   rawBody: string,
   header: string | null | undefined,
@@ -83,9 +89,8 @@ export async function verifyWebhookSignature(
   const signature = signatureBytes(decodedSignature) ?? signatureBytes(encoded);
   const decoded = decodedBody(rawBody);
   if (!signature) return null;
-  // Zoho signs URL-decoded form bodies. If the input cannot be decoded as a
-  // supported form/JSON shape, still authenticate the exact text so malformed
-  // but signed payloads can be acknowledged and recorded as failed receipts.
+  // Zoho signs URL-decoded form bodies. A signed body that is not a supported form or JSON shape
+  // still authenticates as exact text, so it can be acknowledged and recorded as a failed receipt.
   const body = decoded ?? rawBody;
   if (currentSecret && (await verifyWith(currentSecret, body, signature))) return body;
   if (previousSecret && (await verifyWith(previousSecret, body, signature))) return body;
@@ -205,7 +210,6 @@ function occurredAt(message: JSONObject, nowMs: number): number {
   return nowMs;
 }
 
-/** Each provider message becomes one event; ambiguous envelope recipients stay unresolved. */
 export function parseWebhookBody(
   signedBody: string,
   nowMs = Date.now(),

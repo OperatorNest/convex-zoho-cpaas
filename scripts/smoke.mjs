@@ -1,4 +1,3 @@
-// Exercises the example on an anonymous local Convex deployment, including a fresh CI checkout.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHmac, randomBytes } from "node:crypto";
 import {
@@ -14,11 +13,18 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { acquireLock } from "./with-local-lock.mjs";
 
+const cliEnv = { ...process.env, CONVEX_AGENT_MODE: "anonymous" };
+for (const name of [
+  "CONVEX_DEPLOYMENT",
+  "CONVEX_DEPLOY_KEY",
+  "CONVEX_SELF_HOSTED_URL",
+  "CONVEX_SELF_HOSTED_ADMIN_KEY",
+])
+  delete cliEnv[name];
+
 const results = [];
 const failures = [];
 
-// A developer's anonymous backend may contain pre-release rows that no longer
-// match the current schema. Exercise a clean backend without touching that data.
 function isolateIfConfigured() {
   if (!existsSync(".env.local")) return null;
   const sourceRoot = process.cwd();
@@ -50,7 +56,7 @@ function convex(...args) {
   return execFileSync("pnpm", ["exec", "convex", ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, CONVEX_AGENT_MODE: "anonymous" },
+    env: cliEnv,
   });
 }
 
@@ -59,7 +65,7 @@ function setEnv(name, value) {
     input: value,
     encoding: "utf8",
     stdio: ["pipe", "ignore", "pipe"],
-    env: { ...process.env, CONVEX_AGENT_MODE: "anonymous" },
+    env: cliEnv,
   });
   if (result.status !== 0) throw new Error(`Failed to set ${name} on the local deployment`);
 }
@@ -104,7 +110,6 @@ function pushFunctions() {
   try {
     convex("dev", "--once");
   } catch (error) {
-    // Another process may have restarted the shared local backend; retry once.
     console.log(
       `convex dev --once failed (${String(error.message).split("\n")[0]}); retrying once`,
     );
@@ -114,7 +119,7 @@ function pushFunctions() {
 
 function ensureLocalDeployment() {
   if (!existsSync(".env.local")) convex("init");
-  // Refuse a configured cloud deployment even when a local site happens to be in the file.
+
   const envFile = readFileSync(".env.local", "utf8");
   const deployment = envFile.match(/^CONVEX_DEPLOYMENT=(.*)$/m)?.[1]?.trim();
   const cloudUrl = envFile.match(/^CONVEX_URL=(.*)$/m)?.[1]?.trim();
@@ -124,18 +129,16 @@ function ensureLocalDeployment() {
     throw new Error("Smoke requires a local Convex URL");
 }
 
-// The anonymous local backend only stays up while `convex dev` runs, and the webhook journey
-// needs its HTTP site, so keep a dev process alive for the whole run.
 function startDev() {
   const child = spawn("pnpm", ["exec", "convex", "dev"], {
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
-    env: { ...process.env, CONVEX_AGENT_MODE: "anonymous" },
+    env: cliEnv,
   });
   let log = "";
   const ready = new Promise((resolve, reject) => {
     const timeout = setTimeout(
-      () => reject(new Error(`convex dev not ready: ${log.slice(-500)}`)),
+      () => reject(new Error(`convex dev not ready: ${Array.from(log).slice(-500).join("")}`)),
       120_000,
     );
     const onData = (chunk) => {
@@ -149,7 +152,7 @@ function startDev() {
     child.stderr.on("data", onData);
     child.on("exit", (code) => {
       clearTimeout(timeout);
-      reject(new Error(`convex dev exited (${code}): ${log.slice(-500)}`));
+      reject(new Error(`convex dev exited (${code}): ${Array.from(log).slice(-500).join("")}`));
     });
   });
   return { child, ready };
@@ -169,9 +172,7 @@ async function stopDev(dev) {
   ]);
   try {
     process.kill(-pid, "SIGKILL");
-  } catch {
-    // The entire process group has exited.
-  }
+  } catch {}
 }
 
 function siteUrl() {
@@ -197,7 +198,7 @@ function siteUrl() {
   return url;
 }
 
-// Zoho scheme (spec 5.2): HMAC-SHA256 base64 over the URL-decoded JSON text, header carries ts.
+// Zoho signs URL-decoded JSON with HMAC-SHA256.
 function signature(json, secret) {
   const s = createHmac("sha256", secret).update(json, "utf8").digest("base64");
   return `ts=${Date.now()};s=${encodeURIComponent(s)};s-algorithm=HmacSHA256`;
@@ -233,21 +234,22 @@ try {
   const base = siteUrl();
   const secret = randomBytes(24).toString("hex");
   console.log("Building the package and pushing functions to the local deployment...");
-  execFileSync("pnpm", ["build"], { stdio: "ignore" });
+  execFileSync("pnpm", ["build"], { stdio: "ignore", env: cliEnv });
   pushFunctions();
   dev = startDev();
   await dev.ready;
 
-  // Local deployment only.
+  setEnv("ZOHO_CPAAS_REGION", "in");
   setEnv("ZOHO_CPAAS_TEST_MODE", "true");
   setEnv("ZOHO_CPAAS_WEBHOOK_SECRET", secret);
   await waitFor(() => {
     try {
-      return run("example:status").testMode === true;
+      const status = run("example:status");
+      return status.testMode === true && status.region === "in";
     } catch {
       return false;
     }
-  }, "component test-mode environment to reload");
+  }, "component India and test-mode configuration to reload");
 
   const tag = `smoke${Date.now()}`;
   const addr = (name) => `${tag}-${name}@example.test`;
@@ -258,7 +260,6 @@ try {
       return m?.status === status ? m : null;
     }, `${id} to reach ${status}`);
 
-  // a. Sends.
   const [sentId] = run("example:sendEmail", {
     to: addr("bounce"),
     subject: "Smoke",
@@ -297,7 +298,6 @@ try {
       batchRows.every((row) => row.status === "accepted" && row.testMode === true),
   );
 
-  // b. Webhook end to end.
   const events = (reqId, extra = {}) =>
     JSON.stringify({
       event_name: ["hardbounce"],
@@ -359,7 +359,6 @@ try {
     run("example:webhookCallbackCount") === callbacksAfter,
   );
 
-  // c. Suppressed sends do not reach a provider.
   const afterSuppressed = runError("example:sendEmail", {
     to: addr("bounce"),
     subject: "Blocked",
@@ -379,7 +378,6 @@ try {
     mixedRows.some((m) => m?.to === addr("bounce") && m.status === "suppressed"),
   );
 
-  // d. Pagination and suppression management.
   const pageTo = addr("page");
   for (const n of [1, 2, 3]) run("example:sendEmail", { to: pageTo, subject: `P${n}`, text: "x" });
   const page = (cursor) =>
@@ -416,7 +414,6 @@ try {
     ),
   );
 
-  // e. Experimental channels.
   const waId = run("example:sendWhatsappTemplate", {
     from: "+15550100001",
     to: "+15550100002",

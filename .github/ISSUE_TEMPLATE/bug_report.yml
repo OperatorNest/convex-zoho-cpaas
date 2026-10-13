@@ -6,7 +6,7 @@ body:
     id: package_version
     attributes:
       label: Package version
-      placeholder: e.g. 0.2.1, or commit SHA for an unreleased checkout
+      placeholder: Package version or unreleased commit SHA
     validations:
       required: true
   - type: input
@@ -32,7 +32,7 @@ body:
     id: zoho_region
     attributes:
       label: Zoho CPaaS region
-      description: Provide when relevant; leave blank if not applicable or unavailable.
+      description: Select the affected region.
       options: [US, EU, IN, AU, JP, CN, Not applicable]
     validations:
       required: false
@@ -40,7 +40,7 @@ body:
     id: zoho_channel
     attributes:
       label: Channel
-      description: Provide when relevant; leave blank if not applicable or unavailable.
+      description: Select the affected channel.
       options: [Email, SMS, WhatsApp, Not applicable]
     validations:
       required: false
@@ -48,7 +48,7 @@ body:
     id: reproduction
     attributes:
       label: Minimal reproduction
-      description: Include the smallest code or steps that reproduce the issue. Redact sensitive data.
+      description: Provide code or steps without credentials or personal data.
     validations:
       required: true
   - type: textarea
@@ -70,10 +70,3 @@ body:
       description: Do not include credentials, API or webhook tokens, recipient addresses, message contents, phone numbers, or other personal data.
     validations:
       required: false
-  - type: checkboxes
-    id: issue_search
-    attributes:
-      label: Existing reports
-      options:
-        - label: I searched existing issues and discussions.
-          required: true

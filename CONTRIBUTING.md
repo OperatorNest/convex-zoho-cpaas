@@ -1,8 +1,8 @@
 # Contributing
 
-This component sends Zoho CPaaS transactional email, records provider events, and offers experimental template-only SMS and WhatsApp. Read [README](README.md) and [ADRs](docs/adr/) before changing public behavior.
+Read [README](README.md), [AGENTS.md](AGENTS.md), and [ADRs](docs/adr/) before changing behavior.
 
-Use the versions in `.mise.toml` and `package.json`:
+## Setup and checks
 
 ```sh
 mise trust
@@ -14,24 +14,25 @@ mise exec -- pnpm check
 mise exec -- pnpm smoke
 ```
 
-The anonymous local deployment does not require Convex login. `build:codegen` generates the component API, builds the package for the example's config import, and generates the example API. Do not edit generated files by hand. `pnpm check` includes formatting, build, type-aware lint, typecheck, Knip, and coverage thresholds. `pnpm smoke` exercises the real local Convex runtime.
+Node 24 and pnpm 12.9.1 are pinned in `.mise.toml`. Codegen and smoke use an anonymous local deployment under a shared lock; no Convex login is needed. Do not edit generated bindings. `check` runs formatting, build, lint, typecheck, Knip, source invariants, and coverage floors. Component and shared runtime changes also require codegen and smoke.
 
-For a bug report, provide the package, Convex, and Node.js versions, runtime, operation and channel, a minimal reproduction, expected result, and actual result. Remove credentials, API or webhook tokens, recipient addresses, message contents, phone numbers, and personal information from reports and logs. Security reports go through [private vulnerability reporting](https://github.com/OperatorNest/convex-zoho-cpaas/security/advisories/new).
+## Change requirements
 
-Follow the [OperatorNest Code of Conduct](https://github.com/OperatorNest/.github/blob/main/CODE_OF_CONDUCT.md) and [support guidance](https://github.com/OperatorNest/.github/blob/main/SUPPORT.md).
+- Commit messages and PR titles follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
+  (`feat:`, `fix:`, `docs:`, `test:`, `chore:`); a breaking change adds `!` after the type.
+- Until 1.0.0, a breaking change ships without compatibility code, deprecation periods or data
+  migrations; its changeset is a `minor` bump that states what breaks.
 
-## End-to-end testing
+## Provider qualification
 
-A maintainer runs `pnpm e2e --dry-run` after preparing gitignored `.env.e2e` from `.env.e2e.example`. The dry run prints required missing names, optional groups present, the wait length, and the plan; it makes no network calls. Fill `E2E_EMAIL_FROM` with an address on their own Zoho-verified domain and `E2E_EMAIL_TO` with an inbox they control. Optional inputs enable template, second batch recipient, hard bounce, WhatsApp, and India-only SMS checks. The existing anonymous local Convex deployment must already be configured. Do not use a cloud deployment.
+A maintainer prepares ignored `.env.e2e` from `.env.e2e.example` using their own account, verified sender domain, and recipient inbox. Run `pnpm e2e --dry-run` first; it reports input names without network calls. Optional inputs enable templates, batch recipients, hard bounce, WhatsApp, and India-only SMS. Use an existing anonymous local deployment.
 
-A maintainer runs `pnpm e2e` or `pnpm e2e -- --wait 15` from this repo. The runner holds the shared local lock, builds, starts local `convex dev`, replaces the component deployment env with values from `.env.e2e`, removes test mode, and starts a Cloudflare quick tunnel. It prints a boxed webhook URL. In Zoho CPaaS, go to **Agents (Mail Agent) → choose Agent → Webhooks → Configure Webhook**; enter the URL and a description, select **Soft bounced, Hard bounced, Open, Click, Feedback loop** (plus WhatsApp Delivered, Read, Undelivered when testing WhatsApp), and select **Add**. In the Webhooks tab, use the separate top-right **Authentication Key** control, enter the **value** of `ZOHO_CPAAS_WEBHOOK_SECRET` from `.env.e2e`, and select **Configure**. Press Enter in the runner only after both are saved. Open the tracked email and click its link while the countdown runs. The dashboard's **Send Test** is not evidence of a real tracked delivery.
+`pnpm e2e` holds the shared lock, builds, starts local Convex and a quick tunnel, and loads component env without test mode. In Zoho's Agent webhook settings, configure the printed URL, select the tested events, and set the Authentication Key to the configured webhook secret. Press Enter after saving both settings. Open the email and click its link during capture. Dashboard **Send Test** does not prove tracked delivery.
 
-The runner sends through the example app/client, then checks provider acceptance, signed webhook receipt, event mapping, callback correlation, local replay deduplication, and optional hard-bounce suppression. It writes redacted fixtures to `tests/fixtures/e2e/` and a dated observation report. On a fully verified email journey, it updates the README verification line with the observation report. Exact provider response envelopes remain unqualified because the component stores mapped results. The temporary example capture route is active only during the session, rejects requests after its 64-attempt quota, and reports quota exhaustion as a failed run. Raw attempts expire after 30 minutes and are cleared on normal exit. Do not run this maintainer workflow in CI, and never commit an unreviewed fixture or a `.env.e2e` file.
+The runner checks acceptance, signed events, mapping, callback correlation, replay deduplication, and optional suppression. It saves redacted fixtures and a dated report in `tests/fixtures/e2e/`; review them before committing. The session-gated capture route accepts at most 64 attempts. Raw captures are removed on exit or expire after 30 minutes. Do not run e2e in CI. `pnpm e2e:env` loads accepted env names without provider calls.
 
-`pnpm e2e:env` remains available to load accepted component env names without making provider calls. It does not verify a live account. Keep provider results separate from local and simulated checks.
+## Reports and releases
 
-## Releasing
+Bug reports include package, Convex, and Node versions, deployment type, operation, channel, reproduction, expected result, and actual result. Remove credentials, recipients, message content, and personal data. Send vulnerabilities through [private reporting](https://github.com/OperatorNest/convex-zoho-cpaas/security/advisories/new). Follow the [Code of Conduct](https://github.com/OperatorNest/.github/blob/main/CODE_OF_CONDUCT.md) and [support guidance](https://github.com/OperatorNest/.github/blob/main/SUPPORT.md).
 
-Add a changeset for a user-visible change with `pnpm changeset`. A maintainer runs `pnpm changeset version` on a version branch, then merges the version change through a PR. The Release workflow publishes an unpublished `package.json` version through npm trusted publishing after CI and smoke pass on that commit. Pushing, publishing, deploying, and registry submissions require explicit maintainer authorization.
-
-The end-to-end test is a maintainer-run check with their own provider test account and keys. It is never run in CI.
+Add one changeset for a user-visible change. A maintainer runs `pnpm changeset version` on a version branch and merges it through a PR. Release publishes an unpublished package version through npm trusted publishing after CI and smoke pass on that commit. Pushing, publishing, deploying, and registry submissions require explicit authorization.

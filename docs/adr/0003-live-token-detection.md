@@ -1,13 +1,3 @@
-# ADR 0003: Live-token detection is not applicable
+# ADR 0003: Require explicit test mode
 
-## Context
-
-Test mode must refuse credentials with a recognizable live prefix. Zoho CPaaS tokens have no documented live-versus-test prefix that the component can recognize reliably.
-
-## Decision
-
-Require explicit test-mode opt-in and never infer test mode from a token. Do not guess whether a Zoho token is live from its contents.
-
-## Consequences
-
-An operator can opt in to test mode while a real token is configured; no provider call occurs in test mode. Tests and examples use dummy credentials.
+Zoho tokens have no documented live/test prefix. Never infer test mode from credentials. Only client `testMode: true` or env `ZOHO_CPAAS_TEST_MODE === "true"` enables simulation. Simulation skips provider calls even when a token exists; tests use dummy credentials.

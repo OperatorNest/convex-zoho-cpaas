@@ -20,7 +20,12 @@ test("e2e capture route is session gated and records signed delivery plus replay
   const body = JSON.stringify({
     webhook_request_id: "e2e-route-test",
     event_name: ["open"],
-    event_message: [{ email_info: { to: [{ email_address: { address: "owner@example.test" } }] } }],
+    event_message: [
+      {
+        occurred_at: Date.now(),
+        email_info: { to: [{ email_address: { address: "owner@example.test" } }] },
+      },
+    ],
   });
   const headers = {
     "content-type": "application/json",

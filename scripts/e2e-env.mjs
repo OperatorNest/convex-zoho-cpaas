@@ -1,4 +1,3 @@
-// Loads accepted component values from gitignored .env.e2e through stdin only.
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -29,8 +28,7 @@ export function getLocalCliEnv(path = ".env.local", ambient = process.env) {
   if (!existsSync(path))
     throw new Error("Existing anonymous local deployment is required (.env.local missing)");
   const file = readFileSync(path, "utf8");
-  // Convex uses dotenv for --env-file. Node's parser shares its last-wins and
-  // whitespace behavior, but rejects dotenv's colon assignment syntax here.
+
   if (/^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*:\s*\S/m.test(file))
     throw new Error("Unsupported .env.local assignment syntax");
   const parsed = parseEnv(file);
@@ -105,7 +103,6 @@ export function loadE2eEnv(values, { replace = false } = {}) {
       if (!convexEnv(["set", key], value, env)) throw new Error(`Failed to set ${key}`);
       names.push(key);
     } else if (replace) {
-      // A stale per-channel override must not silently replace the shared token.
       if (!convexEnv(["remove", key], undefined, env)) throw new Error(`Failed to remove ${key}`);
     }
   }
@@ -122,7 +119,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     for (const key of loadE2eEnv(values)) console.log(`set ${key}`);
     console.log(`removed ${testModeName} (e2e mode)`);
   } catch (error) {
-    // Never include CLI stderr or configuration values in maintainer output.
     console.error(error instanceof Error ? error.message : "Failed to load .env.e2e");
     process.exitCode = 1;
   }

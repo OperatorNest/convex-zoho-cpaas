@@ -1,5 +1,3 @@
-// Invoke the installed Convex CLI with private function arguments from stdin,
-// keeping recipients and template values out of the operating-system argv.
 import { readFileSync } from "node:fs";
 
 const functionName = process.argv[2];

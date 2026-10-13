@@ -7,6 +7,7 @@ export type MessageStatus = Infer<typeof statusValidator>;
 const rank: Partial<Record<MessageStatus, number>> = {
   queued: 0,
   sending: 1,
+  unknown: 1,
   accepted: 2,
   delivered: 3,
   read: 4,
@@ -30,6 +31,7 @@ export function canTransitionStatus(
   if (terminal.has(current)) return false;
   if (next === "canceled" || next === "suppressed") return current === "queued";
   if (next === "bounced" || next === "complained") return channel === "email";
+  if (next === "unknown") return current === "sending" || current === "queued";
   if (next === "failed") return true;
   if (channel === "email" && (next === "delivered" || next === "read")) return false;
   if (channel === "sms" && next === "read") return false;

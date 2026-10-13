@@ -1,6 +1,7 @@
 import { isRecord } from "../shared/record.js";
 import { v } from "convex/values";
 import {
+  errorData,
   classifyNetworkError,
   classifyProviderError,
   isZohoCpaasError,
@@ -16,7 +17,7 @@ import { internalAction, internalMutation } from "./_generated/server.js";
 import { errorValidator } from "./schema.js";
 import { channelValidator } from "../shared/validators.js";
 import { pool } from "./pool.js";
-import { providerConfiguration, tokenFor } from "./config.js";
+import { providerBaseUrl, providerConfiguration } from "./config.js";
 
 const completionContext = v.object({ jobId: v.id("sendJobs"), attempt: v.number() });
 const outcomeValidator = v.object({
@@ -25,6 +26,7 @@ const outcomeValidator = v.object({
   providerMessageId: v.optional(v.string()),
   warning: v.optional(v.string()),
   error: v.optional(errorValidator),
+  retryable: v.optional(v.boolean()),
   failureDefinitive: v.optional(v.boolean()),
   retryAfterMs: v.optional(v.number()),
   explicitResponse: v.optional(v.boolean()),
@@ -41,21 +43,65 @@ export const begin = internalMutation({
       payload: v.string(),
       testMode: v.boolean(),
       active: v.array(v.string()),
+      baseUrl: v.optional(v.string()),
     }),
     v.null(),
   ),
   handler: async (ctx, { jobId, attempt }) => {
     const job = await ctx.db.get("sendJobs", jobId);
     if (!job || job.finishedAt !== undefined) return null;
+    const now = Date.now();
+    let baseUrl: string | undefined;
+    let configurationError: typeof errorValidator.type | undefined;
+    try {
+      baseUrl = job.testMode
+        ? providerBaseUrl(job.channel)
+        : providerConfiguration(job.channel).baseUrl;
+    } catch (error) {
+      configurationError = errorData(
+        isZohoCpaasError(error) ? error.data.code : "ZOHO_CPAAS_INVALID_CONFIG",
+      );
+    }
     const active: string[] = [];
     for (const id of job.messageIds) {
       const row = await ctx.db.get("messages", id);
-      if (!row || row.status === "canceled" || row.status === "suppressed") continue;
-      if (row.status !== "queued" && row.status !== "sending") continue;
+      if (
+        !row ||
+        row.canceledAt !== undefined ||
+        (row.status !== "queued" &&
+          row.status !== "sending" &&
+          !(row.status === "unknown" && job.channel === "email"))
+      )
+        continue;
+      const suppression = await ctx.db
+        .query("suppressions")
+        .withIndex("by_channel_and_address", (q) =>
+          q.eq("channel", row.channel).eq("address", row.to),
+        )
+        .unique();
+      if (suppression) {
+        await ctx.db.patch("messages", id, {
+          status: row.failureDefinitive === false ? "unknown" : "suppressed",
+          sendingAt: undefined,
+          terminalAt: now,
+        });
+        continue;
+      }
+      if (configurationError) {
+        await ctx.db.patch("messages", id, {
+          status: row.failureDefinitive === false ? "unknown" : "failed",
+          error: configurationError,
+          failureDefinitive: row.failureDefinitive !== false,
+          sendingAt: undefined,
+          terminalAt: now,
+        });
+        continue;
+      }
       active.push(row.to);
       await ctx.db.patch("messages", id, {
         status: "sending",
-        sendingAt: Date.now(),
+        sendingAt: now,
+        attempts: Math.max(row.attempts, attempt),
       });
     }
     if (!active.length) {
@@ -66,17 +112,13 @@ export const begin = internalMutation({
       return null;
     }
     await ctx.db.patch("sendJobs", jobId, { attempts: Math.max(job.attempts, attempt) });
-    for (const id of job.messageIds) {
-      const row = await ctx.db.get("messages", id);
-      if (row && active.includes(row.to))
-        await ctx.db.patch("messages", id, { attempts: Math.max(row.attempts, attempt) });
-    }
     return {
       channel: job.channel,
       path: job.path,
       payload: job.payload,
       testMode: job.testMode,
       active,
+      baseUrl,
     };
   },
 });
@@ -156,67 +198,37 @@ export const execute = internalAction({
   handler: async (ctx, { jobId, attempt }): Promise<Outcome> => {
     const job = await ctx.runMutation(internal.sends.begin, { jobId, attempt });
     if (!job) return { kind: "skipped" };
-    const parsed: unknown = JSON.parse(job.payload);
-    if (!isRecord(parsed))
-      return {
-        kind: "failed",
-        error: { class: "permanent", message: "Stored send payload is invalid", retryable: false },
-        failureDefinitive: true,
-      };
-    let payload = parsed;
-    if (job.channel === "email") payload = filterCanceled(payload, job.active);
-    if (job.channel === "email" && (!Array.isArray(payload.to) || payload.to.length === 0))
-      return {
-        kind: "failed",
-        error: {
-          class: "permanent",
-          message: "No deliverable to recipient remains",
-          retryable: false,
-        },
-        failureDefinitive: true,
-      };
-    if (job.testMode)
-      return {
-        kind: "accepted",
-        providerRequestId: `test-${jobId}`,
-        ...(job.channel === "email" ? {} : { providerMessageId: `test-${jobId}` }),
-      };
-
-    if (!tokenFor(job.channel))
-      return {
-        kind: "failed",
-        error: {
-          class: "permanent",
-          code: "ZOHO_CPAAS_NOT_CONFIGURED" satisfies ZohoCpaasMessageErrorCode,
-          message: "Zoho CPaaS channel token is unavailable",
-          retryable: false,
-        },
-        failureDefinitive: true,
-      };
-    let baseUrl: string;
-    let authorization: string;
-    try {
-      ({ baseUrl, authorization } = providerConfiguration(job.channel));
-    } catch (error) {
-      const code = isZohoCpaasError(error) ? error.data.code : "ZOHO_CPAAS_INVALID_CONFIG";
-      console.warn(code);
-      return {
-        kind: "failed",
-        error: {
-          class: "permanent",
-          code,
-          message: "Zoho CPaaS region or base URL configuration is invalid",
-          retryable: false,
-        },
-        failureDefinitive: true,
-      };
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30_000);
+    let requestStarted = false;
     let response: Response | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      response = await fetch(`${baseUrl}${job.path}`, {
+      const parsed: unknown = JSON.parse(job.payload);
+      if (!isRecord(parsed))
+        return {
+          kind: "failed",
+          error: errorData("ZOHO_CPAAS_VALIDATION_FAILED"),
+          failureDefinitive: true,
+        };
+      let payload = parsed;
+      if (job.channel === "email") payload = filterCanceled(payload, job.active);
+      if (job.channel === "email" && (!Array.isArray(payload.to) || payload.to.length === 0))
+        return {
+          kind: "failed",
+          error: errorData("ZOHO_CPAAS_VALIDATION_FAILED"),
+          failureDefinitive: true,
+        };
+      if (job.testMode)
+        return {
+          kind: "accepted",
+          providerRequestId: `test-${jobId}`,
+          ...(job.channel === "email" ? {} : { providerMessageId: `test-${jobId}` }),
+        };
+
+      const { authorization } = providerConfiguration(job.channel);
+      const baseUrl = job.baseUrl;
+      const controller = new AbortController();
+      timeout = setTimeout(() => controller.abort(), 30_000);
+      const request = {
         method: "POST",
         headers: {
           Authorization: authorization,
@@ -225,11 +237,13 @@ export const execute = internalAction({
         },
         body: JSON.stringify(payload),
         signal: controller.signal,
-      });
-      const raw = (await response.text()).slice(0, 65536);
+      };
+      requestStarted = true;
+      response = await fetch(`${baseUrl}${job.path}`, request);
+      const raw = await response.text();
       let body: unknown;
       try {
-        body = JSON.parse(raw);
+        body = raw.length <= 65536 ? JSON.parse(raw) : null;
       } catch {
         body = null;
       }
@@ -260,26 +274,23 @@ export const execute = internalAction({
         failureDefinitive:
           (response.status < 500 && response.status !== 408) ||
           classified.accountState ||
-          (response.status >= 500 &&
-            !classified.retryable &&
-            (classified.code !== undefined || classified.subCode !== undefined)),
-        error: {
-          class: classified.accountState
-            ? "account-state"
-            : classified.retryable
-              ? "retryable"
-              : "permanent",
-          ...(classified.code ? { code: classified.code } : {}),
-          ...(classified.subCode ? { subCode: classified.subCode } : {}),
-          message: classified.message,
-          retryable: classified.retryable,
-        },
+          (response.status >= 500 && classified.explicitZohoCode === true),
+        error: errorData(classified.code, classified),
+        retryable: classified.retryable,
         ...(classified.retryAfterMs === undefined ? {} : { retryAfterMs: classified.retryAfterMs }),
         ...(job.channel === "sms" && !classified.retryable && recipientFailure(body)
           ? { suppressionReason: recipientFailure(body) ?? "" }
           : {}),
       };
-    } catch {
+    } catch (error) {
+      if (!requestStarted)
+        return {
+          kind: "failed",
+          failureDefinitive: true,
+          error: errorData(
+            isZohoCpaasError(error) ? error.data.code : "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED",
+          ),
+        };
       if (response?.ok)
         return {
           kind: "accepted",
@@ -290,12 +301,8 @@ export const execute = internalAction({
       return {
         kind: "failed",
         failureDefinitive: false,
-        error: {
-          class: classified.retryable ? "retryable" : "permanent",
-          ...(classified.code ? { code: classified.code } : {}),
-          message: classified.message,
-          retryable: classified.retryable,
-        },
+        error: errorData(classified.code),
+        retryable: classified.retryable,
       };
     } finally {
       clearTimeout(timeout);
@@ -314,23 +321,18 @@ export const complete = pool.defineOnComplete<
     const job = await ctx.db.get("sendJobs", args.context.jobId);
     if (!job || job.finishedAt !== undefined) return;
     const attempt = args.context.attempt;
-    let outcome: Outcome =
+    const outcome: Outcome =
       args.result.kind === "success"
         ? args.result.returnValue
         : args.result.kind === "canceled"
           ? { kind: "skipped" }
           : {
               kind: "failed",
-              error: {
-                class: "retryable",
-                code: "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED" satisfies ZohoCpaasMessageErrorCode,
-                message: "Send action did not complete",
-                retryable: job.channel === "email",
-              },
+              error: errorData("ZOHO_CPAAS_WORKPOOL_ACTION_FAILED"),
+              retryable: job.channel === "email",
               failureDefinitive: false,
             };
-    // A worker may fail before begin() has recorded its attempt. The completion
-    // callback supplies the attempt number so crashes still consume one try.
+
     if (job.attempts < attempt) {
       await ctx.db.patch("sendJobs", job._id, { attempts: attempt });
       for (const id of job.messageIds) {
@@ -345,7 +347,7 @@ export const complete = pool.defineOnComplete<
     const now = Date.now();
     const retry =
       outcome.kind === "failed" &&
-      !!outcome.error?.retryable &&
+      outcome.retryable === true &&
       attempt < 5 &&
       (job.channel === "email" || outcome.explicitResponse === true);
     if (retry) {
@@ -364,22 +366,37 @@ export const complete = pool.defineOnComplete<
       await ctx.db.patch("sendJobs", job._id, { workId });
       for (const id of job.messageIds) {
         const row = await ctx.db.get("messages", id);
-        if (row?.status === "sending") {
+        if (
+          row &&
+          row.canceledAt === undefined &&
+          (row.status === "sending" || row.status === "unknown")
+        ) {
           await ctx.db.patch("messages", id, {
-            status: "queued",
+            status: outcome.failureDefinitive === false ? "unknown" : "queued",
             sendingAt: undefined,
             ...(outcome.failureDefinitive === false ? { failureDefinitive: false } : {}),
           });
         } else if (row?.status === "queued" && outcome.failureDefinitive === false) {
-          await ctx.db.patch("messages", id, { failureDefinitive: false });
+          await ctx.db.patch("messages", id, { status: "unknown", failureDefinitive: false });
         }
       }
       return;
     }
     for (const id of job.messageIds) {
       const row = await ctx.db.get("messages", id);
-      if (!row || row.status === "canceled" || row.status === "suppressed") continue;
-      const next = outcome.kind === "accepted" ? "accepted" : "failed";
+      if (
+        !row ||
+        row.canceledAt !== undefined ||
+        row.status === "canceled" ||
+        row.status === "suppressed"
+      )
+        continue;
+      const next =
+        outcome.kind === "accepted"
+          ? "accepted"
+          : outcome.failureDefinitive === false || row.failureDefinitive === false
+            ? "unknown"
+            : "failed";
       const applyStatus = canTransitionStatus(row.status, next, row.channel);
       const failureDefinitive =
         outcome.kind === "failed"
@@ -389,7 +406,9 @@ export const complete = pool.defineOnComplete<
               ? false
               : outcome.failureDefinitive === true
           : row.failureDefinitive;
-      const statusUpdate: { status?: "accepted" | "failed" } = applyStatus ? { status: next } : {};
+      const statusUpdate: { status?: "accepted" | "failed" | "unknown" } = applyStatus
+        ? { status: next }
+        : {};
       const patch = {
         ...((outcome.providerRequestId ?? row.providerRequestId)
           ? { providerRequestId: outcome.providerRequestId ?? row.providerRequestId }
@@ -402,11 +421,13 @@ export const complete = pool.defineOnComplete<
         sendingAt: undefined,
         ...statusUpdate,
         ...(applyStatus && next === "accepted" ? { sentAt: now } : {}),
-        ...(applyStatus &&
-        (next === "failed" || (next === "accepted" && row.channel !== "whatsapp"))
+        ...((applyStatus || (row.status === "unknown" && next === "unknown")) &&
+        (next === "failed" ||
+          next === "unknown" ||
+          (next === "accepted" && row.channel !== "whatsapp"))
           ? { terminalAt: now }
           : {}),
-        ...(outcome.error
+        ...(outcome.error && applyStatus
           ? { error: outcome.error }
           : outcome.kind === "accepted"
             ? { error: undefined }

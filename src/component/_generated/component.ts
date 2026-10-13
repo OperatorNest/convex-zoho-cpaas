@@ -53,15 +53,28 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           _creationTime: number;
           _id: string;
           attempts: number;
+          canceledAt?: number;
           channel: "email" | "sms" | "whatsapp";
           clientReference: string;
           createdAt: number;
           error?: {
-            class: "retryable" | "permanent" | "account-state";
-            code?: string;
+            code:
+              | "ZOHO_CPAAS_IDEMPOTENCY_CONFLICT"
+              | "ZOHO_CPAAS_ALL_SUPPRESSED"
+              | "ZOHO_CPAAS_VALIDATION_FAILED"
+              | "ZOHO_CPAAS_NOT_CONFIGURED"
+              | "ZOHO_CPAAS_INVALID_CONFIG"
+              | "ZOHO_CPAAS_UNSUPPORTED_REGION"
+              | "ZOHO_CPAAS_UPLOAD_FAILED"
+              | "ZOHO_CPAAS_PROVIDER_REJECTED"
+              | "ZOHO_CPAAS_NETWORK_ERROR"
+              | "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED"
+              | "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG"
+              | "ZOHO_CPAAS_STUCK"
+              | "ZOHO_CPAAS_UNRECOGNIZED_SUCCESS_BODY";
             message: string;
-            retryable: boolean;
-            subCode?: string;
+            providerCode?: string;
+            providerStatus?: number;
           };
           failureDefinitive?: boolean;
           from: string;
@@ -75,6 +88,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             | "queued"
             | "sending"
             | "accepted"
+            | "unknown"
             | "delivered"
             | "read"
             | "failed"
@@ -146,6 +160,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             | "queued"
             | "sending"
             | "accepted"
+            | "unknown"
             | "delivered"
             | "read"
             | "failed"
@@ -161,15 +176,28 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             _creationTime: number;
             _id: string;
             attempts: number;
+            canceledAt?: number;
             channel: "email" | "sms" | "whatsapp";
             clientReference: string;
             createdAt: number;
             error?: {
-              class: "retryable" | "permanent" | "account-state";
-              code?: string;
+              code:
+                | "ZOHO_CPAAS_IDEMPOTENCY_CONFLICT"
+                | "ZOHO_CPAAS_ALL_SUPPRESSED"
+                | "ZOHO_CPAAS_VALIDATION_FAILED"
+                | "ZOHO_CPAAS_NOT_CONFIGURED"
+                | "ZOHO_CPAAS_INVALID_CONFIG"
+                | "ZOHO_CPAAS_UNSUPPORTED_REGION"
+                | "ZOHO_CPAAS_UPLOAD_FAILED"
+                | "ZOHO_CPAAS_PROVIDER_REJECTED"
+                | "ZOHO_CPAAS_NETWORK_ERROR"
+                | "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED"
+                | "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG"
+                | "ZOHO_CPAAS_STUCK"
+                | "ZOHO_CPAAS_UNRECOGNIZED_SUCCESS_BODY";
               message: string;
-              retryable: boolean;
-              subCode?: string;
+              providerCode?: string;
+              providerStatus?: number;
             };
             failureDefinitive?: boolean;
             from: string;
@@ -183,6 +211,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               | "queued"
               | "sending"
               | "accepted"
+              | "unknown"
               | "delivered"
               | "read"
               | "failed"

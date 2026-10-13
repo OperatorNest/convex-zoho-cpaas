@@ -2,13 +2,13 @@ import { ZohoCpaas, channelValidator, statusValidator } from "@operatornest/conv
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { components } from "./_generated/api.js";
-import { internalAction, internalMutation, internalQuery, query } from "./_generated/server.js";
+import { internalAction, internalMutation, internalQuery } from "./_generated/server.js";
 
 const zohoCpaas = new ZohoCpaas(components.zohoCpaas, {
   defaultFrom: { address: "notifications@example.test", name: "Example" },
 });
 
-export const status = query({
+export const status = internalQuery({
   args: {},
   returns: v.object({ configured: v.boolean(), testMode: v.boolean(), region: v.string() }),
   handler: (ctx) => zohoCpaas.messages.status(ctx),
@@ -177,7 +177,6 @@ export const e2eCallbacksFor = internalQuery({
     })),
 });
 
-// The maintainer runner invokes these internal wrappers through the same client as a consumer.
 export const e2eSendEmail = internalMutation({
   args: {
     from: v.string(),

@@ -14,18 +14,10 @@ export const uploadFile = action({
   },
   returns: v.string(),
   handler: async (_ctx, args) => {
-    try {
-      validateUploadFile(args.name, args.mimeType, args.content.byteLength);
-    } catch (error) {
-      throw zohoError(
-        "ZOHO_CPAAS_VALIDATION_FAILED",
-        error instanceof Error ? error.message : "Invalid upload file",
-      );
-    }
+    validateUploadFile(args.name, args.mimeType, args.content.byteLength);
     const testMode = resolveTestMode(args.testMode);
     if (testMode) return `test-file-${crypto.randomUUID()}`;
-    if (!tokenFor("email"))
-      throw zohoError("ZOHO_CPAAS_NOT_CONFIGURED", "Zoho CPaaS email upload is not configured");
+    if (!tokenFor("email")) throw zohoError("ZOHO_CPAAS_NOT_CONFIGURED");
     const { baseUrl, authorization } = providerConfiguration("email");
     const body = new FormData();
     body.append("file", new Blob([args.content], { type: args.mimeType }), args.name);
@@ -40,20 +32,16 @@ export const uploadFile = action({
         body,
         signal: controller.signal,
       });
-      raw = (await response.text()).slice(0, 65536);
+      raw = await response.text();
     } catch {
       console.warn("ZOHO_CPAAS_NETWORK_ERROR");
-      throw zohoError(
-        "ZOHO_CPAAS_UPLOAD_FAILED",
-        "Zoho CPaaS file upload did not receive a response",
-        true,
-      );
+      throw zohoError("ZOHO_CPAAS_UPLOAD_FAILED");
     } finally {
       clearTimeout(timeout);
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(raw);
+      parsed = raw.length <= 65536 ? JSON.parse(raw) : null;
     } catch {
       parsed = null;
     }
@@ -63,25 +51,20 @@ export const uploadFile = action({
         parsed,
         response.headers.get("Retry-After"),
       );
-      const zohoCode = classified.code ?? classified.subCode ?? "PROVIDER_REJECTED";
+      const zohoCode = classified.code;
       console.warn(zohoCode);
-      throw zohoError(
-        "ZOHO_CPAAS_UPLOAD_FAILED",
-        "Zoho CPaaS file upload failed",
-        classified.retryable,
-      );
+      throw zohoError("ZOHO_CPAAS_UPLOAD_FAILED", {
+        providerStatus: response.status,
+        providerCode: classified.providerCode,
+      });
     }
-    if (!parsed)
-      throw zohoError(
-        "ZOHO_CPAAS_UPLOAD_FAILED",
-        "Zoho CPaaS file upload returned an invalid response",
-      );
+    if (!parsed) throw zohoError("ZOHO_CPAAS_UPLOAD_FAILED");
     const value = isRecord(parsed) ? parsed : {};
     const data = isRecord(value.data) ? value.data : {};
     const key =
       typeof value.file_cache_key === "string" ? value.file_cache_key : data.file_cache_key;
     if (typeof key !== "string" || !key || key.length > 512)
-      throw zohoError("ZOHO_CPAAS_UPLOAD_FAILED", "Zoho CPaaS did not return a file cache key");
+      throw zohoError("ZOHO_CPAAS_UPLOAD_FAILED");
     return key;
   },
 });

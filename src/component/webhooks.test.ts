@@ -138,7 +138,7 @@ test("reconciliation leaves ambiguous, malformed-recipient and already linked ev
   });
 });
 
-test("receive verifies signatures and records unusable signed payloads once", async () => {
+test("receive verifies signatures and only committed bodies deduplicate", async () => {
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
   const t = convexTest(schema, modules);
   const body = "{broken";
@@ -163,7 +163,7 @@ test("receive verifies signatures and records unusable signed payloads once", as
       contentType: "application/json",
       signature,
     }),
-  ).toMatchObject({ reason: "invalid_payload", duplicate: true });
+  ).toMatchObject({ reason: "invalid_payload", duplicate: false });
   const wrongContent = JSON.stringify({
     webhook_request_id: "wrong-content",
     event_name: ["open"],
@@ -179,7 +179,12 @@ test("receive verifies signatures and records unusable signed payloads once", as
   const valid = JSON.stringify({
     webhook_request_id: "valid-direct",
     event_name: ["open"],
-    event_message: [{ email_info: { to: [{ email_address: { address: "valid@example.test" } }] } }],
+    event_message: [
+      {
+        occurred_at: Date.now(),
+        email_info: { to: [{ email_address: { address: "valid@example.test" } }] },
+      },
+    ],
   });
   expect(
     await t.action(api.webhooks.receive, {

@@ -81,38 +81,99 @@ export class ZohoCpaas {
     private readonly options: ZohoCpaasOptions = {},
   ) {}
 
-  private emailArgs<T extends { from?: EmailAddress }>(
-    args: T,
-  ): T & { from: EmailAddress; testMode?: boolean } {
-    const from = args.from ?? this.options.defaultFrom;
-    if (!from)
-      throw zohoError(
-        "ZOHO_CPAAS_VALIDATION_FAILED",
-        "Supply an email from address or defaultFrom",
-      );
-    return {
-      ...args,
-      from,
-      ...(this.options.testMode === undefined ? {} : { testMode: this.options.testMode }),
-    };
+  private from(from: EmailAddress | undefined): EmailAddress {
+    const address = from ?? this.options.defaultFrom;
+    if (!address) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+    return { address: address.address, name: address.name };
   }
 
   readonly email = {
     send: (ctx: MutationContext, args: EmailSend) =>
-      ctx.runMutation(this.component.messages.send, this.emailArgs(args)),
+      ctx.runMutation(this.component.messages.send, {
+        from: this.from(args.from),
+        to: args.to,
+        cc: args.cc,
+        bcc: args.bcc,
+        replyTo: args.replyTo,
+        trackOpens: args.trackOpens,
+        trackClicks: args.trackClicks,
+        clientReference: args.clientReference,
+        mimeHeaders: args.mimeHeaders,
+        attachments: args.attachments,
+        inlineImages: args.inlineImages,
+        idempotencyKey: args.idempotencyKey,
+        subject: args.subject,
+        html: args.html,
+        text: args.text,
+        testMode: this.options.testMode,
+      }),
     sendTemplate: (ctx: MutationContext, args: EmailTemplateSend) =>
-      ctx.runMutation(this.component.messages.sendTemplate, this.emailArgs(args)),
+      ctx.runMutation(this.component.messages.sendTemplate, {
+        from: this.from(args.from),
+        to: args.to,
+        cc: args.cc,
+        bcc: args.bcc,
+        replyTo: args.replyTo,
+        trackOpens: args.trackOpens,
+        trackClicks: args.trackClicks,
+        clientReference: args.clientReference,
+        mimeHeaders: args.mimeHeaders,
+        attachments: args.attachments,
+        inlineImages: args.inlineImages,
+        idempotencyKey: args.idempotencyKey,
+        templateKey: args.templateKey,
+        templateAlias: args.templateAlias,
+        mergeInfo: args.mergeInfo,
+        testMode: this.options.testMode,
+      }),
     sendBatch: (ctx: MutationContext, args: EmailBatchSend) =>
-      ctx.runMutation(this.component.messages.sendBatch, this.emailArgs(args)),
+      ctx.runMutation(this.component.messages.sendBatch, {
+        from: this.from(args.from),
+        to: args.to,
+        cc: args.cc,
+        bcc: args.bcc,
+        replyTo: args.replyTo,
+        trackOpens: args.trackOpens,
+        trackClicks: args.trackClicks,
+        clientReference: args.clientReference,
+        mimeHeaders: args.mimeHeaders,
+        attachments: args.attachments,
+        inlineImages: args.inlineImages,
+        idempotencyKey: args.idempotencyKey,
+        subject: args.subject,
+        html: args.html,
+        text: args.text,
+        mergeInfo: args.mergeInfo,
+        testMode: this.options.testMode,
+      }),
     sendTemplateBatch: (ctx: MutationContext, args: EmailTemplateBatchSend) =>
-      ctx.runMutation(this.component.messages.sendTemplateBatch, this.emailArgs(args)),
+      ctx.runMutation(this.component.messages.sendTemplateBatch, {
+        from: this.from(args.from),
+        to: args.to,
+        cc: args.cc,
+        bcc: args.bcc,
+        replyTo: args.replyTo,
+        trackOpens: args.trackOpens,
+        trackClicks: args.trackClicks,
+        clientReference: args.clientReference,
+        mimeHeaders: args.mimeHeaders,
+        attachments: args.attachments,
+        inlineImages: args.inlineImages,
+        idempotencyKey: args.idempotencyKey,
+        templateKey: args.templateKey,
+        templateAlias: args.templateAlias,
+        mergeInfo: args.mergeInfo,
+        testMode: this.options.testMode,
+      }),
     uploadFile: (
       ctx: ActionContext,
       args: { name: string; mimeType: string; content: ArrayBuffer },
     ) =>
       ctx.runAction(this.component.files.uploadFile, {
-        ...args,
-        ...(this.options.testMode === undefined ? {} : { testMode: this.options.testMode }),
+        name: args.name,
+        mimeType: args.mimeType,
+        content: args.content,
+        testMode: this.options.testMode,
       }),
   };
 
@@ -120,15 +181,28 @@ export class ZohoCpaas {
     whatsapp: {
       sendTemplate: (ctx: MutationContext, args: WhatsappTemplateSend) =>
         ctx.runMutation(this.component.messages.sendWhatsappTemplate, {
-          ...args,
-          ...(this.options.testMode === undefined ? {} : { testMode: this.options.testMode }),
+          from: args.from,
+          to: args.to,
+          agentId: args.agentId,
+          templateKey: args.templateKey,
+          templateAlias: args.templateAlias,
+          mergeInfo: args.mergeInfo,
+          clientReference: args.clientReference,
+          idempotencyKey: args.idempotencyKey,
+          testMode: this.options.testMode,
         }),
     },
     sms: {
       sendTemplate: (ctx: MutationContext, args: SmsTemplateSend) =>
         ctx.runMutation(this.component.messages.sendSmsTemplate, {
-          ...args,
-          ...(this.options.testMode === undefined ? {} : { testMode: this.options.testMode }),
+          senderKey: args.senderKey,
+          to: args.to,
+          templateKey: args.templateKey,
+          templateAlias: args.templateAlias,
+          mergeInfo: args.mergeInfo,
+          clientReference: args.clientReference,
+          idempotencyKey: args.idempotencyKey,
+          testMode: this.options.testMode,
         }),
     },
   };
@@ -139,23 +213,32 @@ export class ZohoCpaas {
       return { ...status, testMode: this.options.testMode === true || status.testMode };
     },
     get: (ctx: QueryContext, args: { messageId: string }) =>
-      ctx.runQuery(this.component.messages.getMessage, args),
+      ctx.runQuery(this.component.messages.getMessage, { messageId: args.messageId }),
     list: (
       ctx: QueryContext,
       args: {
-        /** Requires `channel`; normalized with that channel's rules. */
         recipient?: string;
         channel?: Channel;
         status?: MessageStatus;
         paginationOpts: PaginationOptions;
       },
-    ) => ctx.runQuery(this.component.messages.listMessages, args),
+    ) =>
+      ctx.runQuery(this.component.messages.listMessages, {
+        recipient: args.recipient,
+        channel: args.channel,
+        status: args.status,
+        paginationOpts: pageArgs(args.paginationOpts),
+      }),
     listEvents: (
       ctx: QueryContext,
       args: { messageId: string; paginationOpts: PaginationOptions },
-    ) => ctx.runQuery(this.component.messages.listEvents, args),
+    ) =>
+      ctx.runQuery(this.component.messages.listEvents, {
+        messageId: args.messageId,
+        paginationOpts: pageArgs(args.paginationOpts),
+      }),
     cancel: (ctx: MutationContext, args: { messageId: string }) =>
-      ctx.runMutation(this.component.messages.cancel, args),
+      ctx.runMutation(this.component.messages.cancel, { messageId: args.messageId }),
   };
   readonly suppressions = {
     list: (
@@ -164,9 +247,16 @@ export class ZohoCpaas {
         channel: Channel;
         paginationOpts: PaginationOptions;
       },
-    ) => ctx.runQuery(this.component.suppressions.list, args),
+    ) =>
+      ctx.runQuery(this.component.suppressions.list, {
+        channel: args.channel,
+        paginationOpts: pageArgs(args.paginationOpts),
+      }),
     remove: (ctx: MutationContext, args: { channel: Channel; address: string }) =>
-      ctx.runMutation(this.component.suppressions.remove, args),
+      ctx.runMutation(this.component.suppressions.remove, {
+        channel: args.channel,
+        address: args.address,
+      }),
   };
 
   registerRoutes(http: HttpRouter, options: { path?: `/${string}` } = {}) {
@@ -175,6 +265,10 @@ export class ZohoCpaas {
       ...(this.options.onEvent ? { onEvent: this.options.onEvent } : {}),
     });
   }
+}
+
+function pageArgs(options: PaginationOptions): PaginationOptions {
+  return { numItems: options.numItems, cursor: options.cursor, endCursor: options.endCursor };
 }
 
 export function registerRoutes(
@@ -201,13 +295,10 @@ export function registerRoutes(
         response = await ctx.runAction(component.webhooks.receive, {
           rawBody,
           contentType: request.headers.get("content-type") ?? "",
-          ...(request.headers.get("producer-signature")
-            ? { signature: request.headers.get("producer-signature") ?? "" }
-            : {}),
-          ...(callbackHandle ? { callbackHandle } : {}),
+          signature: request.headers.get("producer-signature") ?? undefined,
+          callbackHandle,
         });
       } catch {
-        // A callback failure aborts the component transaction so Zoho can retry.
         return new Response("Webhook processing failed", { status: 500 });
       }
       if (response.reason === "missing_secret")
@@ -236,7 +327,6 @@ async function readBoundedBody(
   let size = 0;
   try {
     while (true) {
-      // Reading the stream sequentially is required to enforce a hard byte cap.
       // oxlint-disable-next-line no-await-in-loop -- sequential reads enforce the byte limit
       const { done, value } = await reader.read();
       if (done) break;

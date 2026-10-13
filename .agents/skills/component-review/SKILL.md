@@ -1,12 +1,8 @@
 ---
 name: component-review
-description: Contributor guidance for component review.
+description: Review this component's behavior and boundaries.
 ---
 
 # Component review
 
-Read `README.md`, `CONTRIBUTING.md`, relevant ADRs, and affected source and tests. Inspect the complete change, including new files.
-
-Trace a representative call through the client, component function, validators, schema or queue, and example app. Check the boundaries the change owns: V8 portability, component environment, app authentication and authorization, validators, bounded indexed reads, verified webhook or push handling, test-mode separation, errors, exports, generated output, and retention.
-
-For each actionable finding, identify the file and line, reachable behavior, consequence, and fix. Distinguish confirmed defects from unverified concerns. After fixes, rerun affected checks. Report simulator, local runtime, and external provider evidence separately.
+Read README, CONTRIBUTING, ADRs, and the complete diff. Trace a call through client, component, validators, schema, example, and smoke. Check V8 portability, component env, app authorization, input and read bounds, signatures, replay, correlation, retries, suppression, cancellation, retention, exports, and generated bindings. Report each defect's file, line, reachable input, consequence, and fix. Separate confirmed defects from unverified concerns and simulator results from local runtime and provider observations.

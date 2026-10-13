@@ -1,3 +1,4 @@
+import { boundedPage } from "../shared/bounds.js";
 import { paginator } from "convex-helpers/server/pagination";
 import { paginationOptsValidator, paginationResultValidator } from "convex/server";
 import { v } from "convex/values";
@@ -12,7 +13,7 @@ export const list = query({
     paginator(ctx.db, schema)
       .query("suppressions")
       .withIndex("by_channel_and_address", (q) => q.eq("channel", args.channel))
-      .paginate(args.paginationOpts),
+      .paginate(boundedPage(args.paginationOpts)),
 });
 
 export const remove = mutation({

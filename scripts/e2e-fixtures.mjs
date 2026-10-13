@@ -40,7 +40,7 @@ const allowedKeys = new Set([
   "version",
   "mailagent_key",
 ]);
-// Only literal names understood by src/shared/webhook.ts may survive a fixture.
+
 const eventNames = new Set([
   "hardbounce",
   "hard_bounce",
@@ -184,7 +184,6 @@ function redactTree(value, state, key = "", ancestors = [], depth = 0) {
   return value === null || typeof value === "boolean" ? value : null;
 }
 
-/** In-memory redaction; no raw body, headers, or parsed identifiers are returned. */
 export function sanitizeE2eFixture({
   rawBody,
   contentType,
@@ -243,12 +242,9 @@ export function sanitizeE2eFixture({
   };
 }
 
-/** Persist a redacted provider observation under tests/fixtures/e2e/. */
 export async function saveE2eFixture(input) {
   let parserResult = input.parserResult;
   if (parserResult === undefined) {
-    // The e2e runner builds the package first. Parse before redaction so expected
-    // mapping describes what the real payload exercised, without storing its IDs.
     const { parseWebhookBody } = await import("../dist/shared/webhook.js");
     parserResult = parseWebhookBody(input.rawBody);
   }

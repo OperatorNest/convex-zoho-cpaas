@@ -1,17 +1,17 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { vWorkId } from "@convex-dev/workpool";
+import { zohoCpaasErrorCodes } from "../shared/errors.js";
 import { channelValidator, statusValidator } from "../shared/validators.js";
 import { normalizedWebhookEventValidator } from "../shared/webhook.js";
 
 export const eventChannelValidator = normalizedWebhookEventValidator.fields.channel;
 export { channelValidator, statusValidator };
 export const errorValidator = v.object({
-  class: v.union(v.literal("retryable"), v.literal("permanent"), v.literal("account-state")),
-  code: v.optional(v.string()),
-  subCode: v.optional(v.string()),
+  code: v.union(...zohoCpaasErrorCodes.map((code) => v.literal(code))),
   message: v.string(),
-  retryable: v.boolean(),
+  providerStatus: v.optional(v.number()),
+  providerCode: v.optional(v.string()),
 });
 
 export default defineSchema({
@@ -34,16 +34,17 @@ export default defineSchema({
     sendingAt: v.optional(v.number()),
     sentAt: v.optional(v.number()),
     terminalAt: v.optional(v.number()),
+    canceledAt: v.optional(v.number()),
   })
     .index("by_providerRequestId_and_to", ["providerRequestId", "to"])
     .index("by_providerMessageId", ["providerMessageId"])
-    .index("by_clientReference", ["clientReference"])
+    .index("by_channel_and_clientReference_and_to", ["channel", "clientReference", "to"])
     .index("by_to_and_createdAt", ["to", "createdAt"])
     .index("by_status_and_createdAt", ["status", "createdAt"])
     .index("by_status_and_sendingAt_and_createdAt", ["status", "sendingAt", "createdAt"])
     .index("by_terminalAt", ["terminalAt"])
     .index("by_status_and_terminalAt_and_createdAt", ["status", "terminalAt", "createdAt"])
-    .index("by_jobId_and_status", ["jobId", "status"]),
+    .index("by_jobId_and_status_and_canceledAt", ["jobId", "status", "canceledAt"]),
   sendJobs: defineTable({
     channel: channelValidator,
     path: v.string(),
@@ -83,8 +84,8 @@ export default defineSchema({
     reason: v.optional(v.string()),
     bodyHash: v.string(),
   })
-    .index("by_providerEventId", ["providerEventId"])
-    .index("by_bodyHash", ["bodyHash"])
+    .index("by_providerEventId_and_reason", ["providerEventId", "reason"])
+    .index("by_bodyHash_and_reason", ["bodyHash", "reason"])
     .index("by_createdAt", ["createdAt"]),
   suppressions: defineTable({
     channel: channelValidator,

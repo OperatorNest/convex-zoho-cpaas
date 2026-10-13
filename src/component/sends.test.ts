@@ -57,7 +57,7 @@ test("completion callbacks count pre-begin crashes once and cap retries at five"
     });
 
   expect(await t.run((ctx) => ctx.db.get("messages", messageId))).toMatchObject({
-    status: "failed",
+    status: "unknown",
     attempts: 5,
   });
   expect(await t.run((ctx) => ctx.db.get("sendJobs", jobId))).toMatchObject({
@@ -94,7 +94,7 @@ test("a crash before begin keeps a canceled retry non-replayable", async () => {
     result: { kind: "failed", error: "worker crashed before begin" },
   });
   expect(await t.query(api.messages.getMessage, { messageId })).toMatchObject({
-    status: "queued",
+    status: "unknown",
     attempts: 1,
     failureDefinitive: false,
   });
@@ -148,10 +148,8 @@ test("a stale completion preserves a provider-confirmed definitive failure", asy
         kind: "failed",
         failureDefinitive: false,
         error: {
-          class: "permanent",
           code: "ZOHO_CPAAS_NETWORK_ERROR",
           message: "stale network outcome",
-          retryable: false,
         },
       },
     },

@@ -57,7 +57,7 @@ test("suppressions are listed and removed per channel with channel-specific norm
     t.query(api.suppressions.list, { channel, paginationOpts: { numItems: 1, cursor: null } });
   expect((await list("sms")).page.map((row) => row.address)).toEqual(["919876543210"]);
   expect((await list("whatsapp")).page.map((row) => row.address)).toEqual(["+919876543210"]);
-  // A different channel's representation of the same number never matches.
+
   expect(
     await t.mutation(api.suppressions.remove, { channel: "whatsapp", address: "9198 7654 3210" }),
   ).toBe(true);

@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import type { ZohoCpaasMessageErrorCode } from "../shared/errors.js";
+import { errorData } from "../shared/errors.js";
+import { webhookReceiptRetentionMs } from "../shared/webhook.js";
 import { env, internalMutation } from "./_generated/server.js";
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
@@ -7,9 +8,6 @@ import type { Doc, Id } from "./_generated/dataModel.js";
 const BATCH = 200;
 const DAY = 86_400_000;
 const STUCK_SENDING_AFTER = DAY;
-// Webhook replay is only deduplicated while its receipt exists, so receipts outlive
-// shorter configured retention windows.
-const MIN_RECEIPT_RETENTION_DAYS = 30;
 
 export const run = internalMutation({
   args: {},
@@ -35,15 +33,10 @@ export const run = internalMutation({
       .take(remaining);
     for (const message of staleAttempt) {
       await ctx.db.patch("messages", message._id, {
-        status: "failed",
+        status: "unknown",
         terminalAt: now,
         failureDefinitive: false,
-        error: {
-          class: "permanent",
-          code: "ZOHO_CPAAS_STUCK" satisfies ZohoCpaasMessageErrorCode,
-          message: "Send remained in progress for more than 24 hours.",
-          retryable: false,
-        },
+        error: errorData("ZOHO_CPAAS_STUCK"),
       });
       if (message.jobId && !jobsToFinalize.includes(message.jobId))
         jobsToFinalize.push(message.jobId);
@@ -55,12 +48,16 @@ export const run = internalMutation({
         if (!job || job.finishedAt !== undefined) continue;
         const queued = await ctx.db
           .query("messages")
-          .withIndex("by_jobId_and_status", (q) => q.eq("jobId", job._id).eq("status", "queued"))
+          .withIndex("by_jobId_and_status_and_canceledAt", (q) =>
+            q.eq("jobId", job._id).eq("status", "queued"),
+          )
           .take(1);
         if (queued.length > 0) continue;
         const sending = await ctx.db
           .query("messages")
-          .withIndex("by_jobId_and_status", (q) => q.eq("jobId", job._id).eq("status", "sending"))
+          .withIndex("by_jobId_and_status_and_canceledAt", (q) =>
+            q.eq("jobId", job._id).eq("status", "sending"),
+          )
           .take(1);
         if (sending.length > 0) continue;
         await ctx.db.patch("sendJobs", job._id, {
@@ -124,8 +121,6 @@ export const run = internalMutation({
       await finalizeJobs();
     }
     if (remaining > 0) {
-      // Accepted provider states (notably WhatsApp) can remain nonterminal forever.
-      // Query status + missing terminalAt + createdAt so old active queue rows do not expire.
       const fallbackStatuses = [
         "accepted",
         "delivered",
@@ -154,7 +149,7 @@ export const run = internalMutation({
       const receipts = await ctx.db
         .query("webhookReceipts")
         .withIndex("by_createdAt", (q) =>
-          q.lt("createdAt", now - Math.max(days, MIN_RECEIPT_RETENTION_DAYS) * DAY),
+          q.lt("createdAt", now - webhookReceiptRetentionMs(env.ZOHO_CPAAS_RETENTION_DAYS)),
         )
         .take(remaining);
       for (const receipt of receipts) {

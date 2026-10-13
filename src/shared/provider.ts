@@ -1,3 +1,4 @@
+import { boundedPayload, boundedString } from "./bounds.js";
 import { zohoError } from "./errors.js";
 import { v, type Infer } from "convex/values";
 import {
@@ -34,16 +35,13 @@ export function regionBaseUrl(region: string | undefined, override?: string): st
   if (override) {
     const url = new URL(override);
     if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
-      throw zohoError(
-        "ZOHO_CPAAS_INVALID_CONFIG",
-        "ZOHO_CPAAS_BASE_URL must be an HTTPS URL without credentials or a query",
-      );
+      throw zohoError("ZOHO_CPAAS_INVALID_CONFIG");
     }
     return url.href.replace(/\/$/, "");
   }
   if (!region) return hosts.us;
   if (isRegion(region)) return hosts[region];
-  throw zohoError("ZOHO_CPAAS_UNSUPPORTED_REGION", "Unsupported ZOHO_CPAAS_REGION");
+  throw zohoError("ZOHO_CPAAS_UNSUPPORTED_REGION");
 }
 
 export function normalizeToken(token: string): string {
@@ -51,23 +49,21 @@ export function normalizeToken(token: string): string {
     .trim()
     .replace(/^Zoho-enczapikey\s+/i, "")
     .trim();
-  if (!stripped || /\s/.test(stripped))
-    throw zohoError("ZOHO_CPAAS_INVALID_CONFIG", "Invalid Zoho CPaaS token");
+  if (!stripped || /\s/.test(stripped)) throw zohoError("ZOHO_CPAAS_INVALID_CONFIG");
   return `Zoho-enczapikey ${stripped}`;
 }
 
 export function normalizeEmail(address: string): string {
   const normalized = address.trim().toLowerCase();
   if (normalized.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Invalid email address");
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   }
   return normalized;
 }
 
 export function normalizePhone(number: string): string {
   const digits = number.replace(/[\s()+-]/g, "");
-  if (!/^\d{8,15}$/.test(digits))
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Invalid international phone number");
+  if (!/^\d{8,15}$/.test(digits)) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   return digits;
 }
 
@@ -103,45 +99,25 @@ export type EmailInput = {
 };
 
 const MAX_RECIPIENTS = 500;
-const MAX_INLINE_BASE64_BYTES = 256 * 1024;
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 
 export function validateUploadFile(name: string, mimeType: string, byteLength: number): void {
   if (!name || name.length > 150 || !mimeType || byteLength > MAX_UPLOAD_BYTES)
-    throw zohoError(
-      "ZOHO_CPAAS_VALIDATION_FAILED",
-      "Invalid file or file exceeds Zoho's 15 MB upload limit",
-    );
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
 }
 
 function providerAddress(input: EmailAddress): EmailAddress {
-  if (input.name && input.name.length > 250)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Email display name exceeds 250 characters");
+  if (input.name && input.name.length > 250) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   const address = input.address.trim();
   normalizeEmail(address);
   return { address, ...(input.name ? { name: input.name } : {}) };
 }
 
 function recipients(input: EmailAddress[]) {
-  if (input.length > MAX_RECIPIENTS)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Email recipient limit is 500 per field");
+  if (input.length > MAX_RECIPIENTS) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   const unique = new Set(input.map((item) => normalizeEmail(item.address)));
-  if (unique.size !== input.length)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Duplicate email recipient");
+  if (unique.size !== input.length) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   return input.map((item) => ({ email_address: providerAddress(item) }));
-}
-
-function inlineContentBytes(value: unknown): number {
-  if (Array.isArray(value))
-    return value.reduce((total, item) => total + inlineContentBytes(item), 0);
-  if (!value || typeof value !== "object") return 0;
-  let total = 0;
-  for (const [key, item] of Object.entries(value)) {
-    if (key === "content" && typeof item === "string")
-      total += new TextEncoder().encode(item).byteLength;
-    else total += inlineContentBytes(item);
-  }
-  return total;
 }
 
 function isBatchRecipient(item: EmailAddress | EmailRecipient): item is EmailRecipient {
@@ -152,23 +128,17 @@ function media(input: EmailAttachment[] | InlineImage[] | undefined) {
   if (!input) return undefined;
   return input.map((item) => {
     if (("name" in item && item.name.length > 150) || ("cid" in item && !item.cid))
-      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Invalid attachment name or CID");
+      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
     const content = item.content?.replace(/\s+/g, "");
     if (Boolean(content) === Boolean(item.fileCacheKey)) {
-      throw zohoError(
-        "ZOHO_CPAAS_VALIDATION_FAILED",
-        "Supply either inline content or a file cache key",
-      );
+      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
     }
     if (
       content &&
       (!item.mimeType ||
         !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(content))
     ) {
-      throw zohoError(
-        "ZOHO_CPAAS_VALIDATION_FAILED",
-        "Invalid base64 attachment or missing MIME type",
-      );
+      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
     }
     const key = "name" in item ? { name: item.name } : { cid: item.cid };
     return {
@@ -185,10 +155,12 @@ export function buildEmailPayload(
   to: EmailAddress[] | EmailRecipient[],
   clientReference: string,
 ): Record<string, unknown> {
+  boundedString(input.templateKey, 200);
+  boundedString(input.templateAlias, 100);
   const first = to[0];
   const batch = first !== undefined && isBatchRecipient(first);
   if (to.some((item) => isBatchRecipient(item) !== batch))
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Mixed email recipient formats");
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   const normalizedTo = to.map((item) =>
     isBatchRecipient(item)
       ? {
@@ -203,37 +175,27 @@ export function buildEmailPayload(
     new Set(normalizedTo.map((item) => normalizeEmail(item.email_address.address))).size !==
     normalizedTo.length
   )
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Duplicate email recipient");
-  if (normalizedTo.length > MAX_RECIPIENTS)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Email batch limit is 500");
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  if (normalizedTo.length > MAX_RECIPIENTS) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   if (normalizedTo.length === 0 && !input.cc?.length && !input.bcc?.length) {
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "At least one email recipient is required");
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   }
-  if (input.subject && input.subject.length > 500)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Email subject exceeds 500 characters");
+  if (input.subject && input.subject.length > 500) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   if ((input.attachments?.length ?? 0) + (input.inlineImages?.length ?? 0) > 60)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Email media limit is 60 items");
-  if (input.templateKey && input.templateAlias)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Choose one email template identifier");
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  if (input.templateKey && input.templateAlias) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   if ((input.templateKey || input.templateAlias) && (input.subject || input.html || input.text)) {
-    throw zohoError(
-      "ZOHO_CPAAS_VALIDATION_FAILED",
-      "Template sends do not accept an inline subject or body",
-    );
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   }
   if (
     !input.templateKey &&
     !input.templateAlias &&
     (!input.subject || (!input.html && !input.text))
   ) {
-    throw zohoError(
-      "ZOHO_CPAAS_VALIDATION_FAILED",
-      "Email needs a subject and an HTML or text body",
-    );
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   }
   const ref = input.clientReference ?? clientReference;
-  if (!ref || ref.length > 100)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Client reference must be 1–100 characters");
+  if (!ref || ref.length > 100) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   const payload: Record<string, unknown> = {
     from: providerAddress(input.from),
     to: normalizedTo,
@@ -256,17 +218,8 @@ export function buildEmailPayload(
   if (input.mimeHeaders) payload.mime_headers = input.mimeHeaders;
   if (input.attachments) payload.attachments = media(input.attachments);
   if (input.inlineImages) payload.inline_images = media(input.inlineImages);
-  assertEmailLimits(payload);
+  boundedPayload(payload);
   return payload;
-}
-
-function assertEmailLimits(payload: unknown): void {
-  if (inlineContentBytes(payload) > MAX_INLINE_BASE64_BYTES) {
-    throw zohoError(
-      "ZOHO_CPAAS_VALIDATION_FAILED",
-      "Inline attachment content exceeds 256 KiB; use uploadFile and pass its fileCacheKey instead",
-    );
-  }
 }
 
 export function isIndiaBaseUrl(override: string | undefined): boolean {
@@ -289,11 +242,10 @@ export type TemplateInput = {
 function assertJsonDepth(value: JsonValue, remaining: number): void {
   if (value === null || typeof value !== "object") {
     if (typeof value === "number" && !Number.isFinite(value))
-      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Invalid merge info number");
+      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
     return;
   }
-  if (remaining === 0)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Merge info nesting exceeds three levels");
+  if (remaining === 0) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   if (Array.isArray(value)) {
     for (const item of value) assertJsonDepth(item, remaining - 1);
   } else {
@@ -302,17 +254,17 @@ function assertJsonDepth(value: JsonValue, remaining: number): void {
 }
 
 function template(input: TemplateInput, clientReference: string) {
+  boundedString(input.templateKey, 200);
   if (Boolean(input.templateKey) === Boolean(input.templateAlias)) {
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Supply exactly one template key or alias");
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   }
   if (input.templateAlias && input.templateAlias.length > 100)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Template alias exceeds 100 characters");
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   if (input.mergeInfo) {
     for (const value of Object.values(input.mergeInfo)) assertJsonDepth(value, 3);
   }
   const ref = input.clientReference ?? clientReference;
-  if (!ref || ref.length > 100)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Client reference must be 1–100 characters");
+  if (!ref || ref.length > 100) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   return {
     ...(input.templateKey
       ? { template_key: input.templateKey }
@@ -327,19 +279,15 @@ export function buildSmsPayload(
   clientReference: string,
 ) {
   if (!input.senderKey || input.senderKey.length > 200)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Invalid SMS sender key");
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   const to = normalizePhone(input.to);
-  if (!/^91\d{10}$/.test(to))
-    throw zohoError(
-      "ZOHO_CPAAS_VALIDATION_FAILED",
-      "SMS requires an India recipient with country code 91",
-    );
+  if (!/^91\d{10}$/.test(to)) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   const payload = {
     sender_key: input.senderKey,
     to: [{ mobile_no: to }],
     ...template(input, clientReference),
   };
-  assertEmailLimits(payload);
+  boundedPayload(payload);
   return payload;
 }
 
@@ -347,16 +295,16 @@ export function buildWhatsappPayload(
   input: TemplateInput & { from: string; agentId?: string },
   clientReference: string,
 ) {
+  boundedString(input.agentId, 200);
   const from = `+${normalizePhone(input.from)}`;
   const to = `+${normalizePhone(input.to)}`;
-  if (from.length > 20 || to.length > 20)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Invalid WhatsApp number");
+  if (from.length > 20 || to.length > 20) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   const payload = {
     from,
     to,
     ...template(input, clientReference),
     ...(input.agentId ? { agent_id: input.agentId } : {}),
   };
-  assertEmailLimits(payload);
+  boundedPayload(payload);
   return payload;
 }

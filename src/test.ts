@@ -3,7 +3,11 @@ import type { GenericSchema, SchemaDefinition } from "convex/server";
 import schema from "./component/schema.js";
 import { register as registerWorkpool } from "@convex-dev/workpool/test";
 
-const modules = import.meta.glob<Record<string, unknown>>([
+type Modules = Parameters<
+  TestConvex<SchemaDefinition<GenericSchema, boolean>>["registerComponent"]
+>[2];
+type GlobImportMeta = ImportMeta & { glob(patterns: string[]): Modules };
+const modules = (import.meta as GlobImportMeta).glob([
   "./component/**/*.ts",
   "!./component/**/*.test.ts",
 ]);

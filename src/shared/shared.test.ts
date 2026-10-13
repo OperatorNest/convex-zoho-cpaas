@@ -1,7 +1,10 @@
 import { describe, expect, test } from "vitest";
+import { ConvexError } from "convex/values";
 import { atOrThrow } from "../test-helpers.js";
 import {
   classifyNetworkError,
+  isZohoCpaasError,
+  zohoError,
   classifyProviderError,
   parseRetryAfter,
   retryBackoffMs,
@@ -212,11 +215,11 @@ describe("provider request shapes and limits", () => {
       validateUploadFile("a".repeat(150), "application/octet-stream", 15 * 1024 * 1024),
     ).not.toThrow();
     expect(() => validateUploadFile("a".repeat(151), "application/octet-stream", 1)).toThrow(
-      /15 MB/,
+      /ZOHO_CPAAS_VALIDATION_FAILED/,
     );
     expect(() =>
       validateUploadFile("file.bin", "application/octet-stream", 15 * 1024 * 1024 + 1),
-    ).toThrow(/15 MB/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
   });
   test("uses documented nested recipient fields but flat reply_to", () => {
     expect(
@@ -283,35 +286,35 @@ describe("provider request shapes and limits", () => {
         Array.from({ length: 501 }, (_, i) => ({ address: `a${i}@example.com` })),
         "id",
       ),
-    ).toThrow(/500/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
     expect(() =>
       buildEmailPayload(
         { ...input, attachments: [{ name: "a", content: "no?", mimeType: "text/plain" }] },
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/base64/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
     expect(() =>
       buildEmailPayload(
         { ...input, attachments: [{ name: "a", content: "abcde", mimeType: "text/plain" }] },
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/base64/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
     expect(() =>
       buildEmailPayload(
         { ...input, attachments: [{ name: "a", content: " \n\t ", mimeType: "text/plain" }] },
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/either inline content or a file cache key/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
     expect(() =>
       buildEmailPayload(
         { ...input, replyTo: [{ address: "same@example.com" }, { address: "SAME@example.com" }] },
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/Duplicate/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
     expect(() =>
       buildEmailPayload(
         {
@@ -321,7 +324,7 @@ describe("provider request shapes and limits", () => {
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/500/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
     expect(() =>
       buildEmailPayload(
         {
@@ -335,14 +338,14 @@ describe("provider request shapes and limits", () => {
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/60/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
     expect(
       buildEmailPayload(
-        { ...input, text: "a".repeat(270_000) },
+        { ...input, text: "a".repeat(250_000) },
         [{ address: "to@example.com" }],
         "id",
       ).textbody,
-    ).toBe("a".repeat(270_000));
+    ).toBe("a".repeat(250_000));
     expect(
       buildEmailPayload(
         {
@@ -351,7 +354,7 @@ describe("provider request shapes and limits", () => {
             {
               name: "exact.bin",
               mimeType: "application/octet-stream",
-              content: "A".repeat(256 * 1024),
+              content: "A".repeat(256 * 1024 - 1024),
             },
           ],
         },
@@ -374,7 +377,7 @@ describe("provider request shapes and limits", () => {
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/uploadFile.*fileCacheKey/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
     expect(() =>
       buildEmailPayload(
         {
@@ -390,7 +393,7 @@ describe("provider request shapes and limits", () => {
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/uploadFile.*fileCacheKey/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
     expect(
       buildEmailPayload(
         { ...input, attachments: [{ name: "a".repeat(150), fileCacheKey: "cache" }] },
@@ -404,14 +407,14 @@ describe("provider request shapes and limits", () => {
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/name/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
     expect(() =>
       buildEmailPayload(
         { ...input, subject: "s".repeat(501) },
         [{ address: "to@example.com" }],
         "id",
       ),
-    ).toThrow(/subject/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
     expect(
       buildEmailPayload(
         {
@@ -460,7 +463,7 @@ describe("provider request shapes and limits", () => {
     });
     expect(() =>
       buildSmsPayload({ senderKey: "sender", to: "+14155550142", templateKey: "key" }, "id"),
-    ).toThrow(/India recipient/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
     expect(
       buildSmsPayload(
         {
@@ -482,7 +485,7 @@ describe("provider request shapes and limits", () => {
         },
         "id",
       ),
-    ).toThrow(/nesting/);
+    ).toThrow(/ZOHO_CPAAS_VALIDATION_FAILED/);
   });
 
   test("maps regions and token prefix", () => {
@@ -506,12 +509,12 @@ describe("errors and message status", () => {
     ).toMatchObject({
       retryable: false,
       accountState: false,
-      code: "TM_4001",
+      providerCode: "TM_4001",
       subCode: "SERR_157",
     });
     expect(classifyProviderError(400, { data: { error_code: "TM_3301" } })).toMatchObject({
       retryable: false,
-      code: "TM_3301",
+      providerCode: "TM_3301",
     });
     expect(
       classifyProviderError(500, { error: { code: "TM_5001", details: [{ code: "LE_102" }] } }),
@@ -594,7 +597,7 @@ describe("errors and message status", () => {
     expect(retryBackoffMs(5)).toBe(16000);
   });
 
-  test("treats ambiguous SMS/WhatsApp network failures as permanent for this send", () => {
+  test("never retries SMS or WhatsApp network failures", () => {
     expect(classifyNetworkError("sms").retryable).toBe(false);
     expect(classifyNetworkError("whatsapp").retryable).toBe(false);
     expect(classifyNetworkError("email").retryable).toBe(true);
@@ -627,5 +630,39 @@ test("stableStringify sorts keys at every depth and matches JSON for ordered dat
 
 test("every documented provider error code survives classification verbatim", () => {
   for (const code of zohoCpaasProviderErrorCodes)
-    expect(classifyProviderError(400, { error: { code } }).code).toBe(code);
+    expect(classifyProviderError(400, { error: { code } }).providerCode).toBe(code);
+});
+
+test("the exported error guard rejects malformed provider metadata and missing messages", () => {
+  const code = "ZOHO_CPAAS_PROVIDER_REJECTED";
+  expect(isZohoCpaasError(zohoError(code, { providerStatus: 429, providerCode: "TM_3601" }))).toBe(
+    true,
+  );
+  for (const data of [
+    null,
+    code,
+    { code },
+    { code: "UNRECOGNIZED", message: "Message" },
+    { code, message: 4 },
+    { code, message: "Message", providerStatus: "429" },
+    { code, message: "Message", providerStatus: 99 },
+    { code, message: "Message", providerStatus: 600 },
+    { code, message: "Message", providerStatus: 429.5 },
+    { code, message: "Message", providerCode: "A".repeat(65) },
+    { code, message: "Message", providerCode: 4 },
+  ])
+    expect(isZohoCpaasError(new ConvexError(data))).toBe(false);
+  expect(isZohoCpaasError(new Error("Internal diagnostic"))).toBe(false);
+  const classified = classifyProviderError(400, {
+    error: { code: "TM_4001", message: "private description", details: [{ recipient: "private" }] },
+  });
+  expect(zohoError(classified.code, classified).data).toEqual({
+    code,
+    message: "The provider rejected the request.",
+    providerStatus: 400,
+    providerCode: "TM_4001",
+  });
+  expect(
+    classifyProviderError(400, { error: { code: "A".repeat(65) } }).providerCode,
+  ).toBeUndefined();
 });

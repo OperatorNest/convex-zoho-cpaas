@@ -51,7 +51,7 @@ test("uploadFile classifies network and malformed successful responses", async (
     }),
   );
   await expect(t.action(api.files.uploadFile, file)).rejects.toMatchObject({
-    data: { code: "ZOHO_CPAAS_UPLOAD_FAILED", retryable: true },
+    data: { code: "ZOHO_CPAAS_UPLOAD_FAILED" },
   });
   vi.stubGlobal(
     "fetch",
@@ -99,14 +99,14 @@ test("uploadFile reports provider rejection and unusable cache keys", async () =
     ),
   );
   await expect(t.action(api.files.uploadFile, file)).rejects.toMatchObject({
-    data: { code: "ZOHO_CPAAS_UPLOAD_FAILED", retryable: true },
+    data: { code: "ZOHO_CPAAS_UPLOAD_FAILED", providerStatus: 429, providerCode: "THROTTLED" },
   });
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => new Response("not-json", { status: 400 })),
   );
   await expect(t.action(api.files.uploadFile, file)).rejects.toMatchObject({
-    data: { code: "ZOHO_CPAAS_UPLOAD_FAILED", retryable: false },
+    data: { code: "ZOHO_CPAAS_UPLOAD_FAILED" },
   });
   vi.stubGlobal(
     "fetch",

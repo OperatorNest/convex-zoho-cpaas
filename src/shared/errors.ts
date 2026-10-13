@@ -10,50 +10,72 @@ export const zohoCpaasErrorCodes = [
   "ZOHO_CPAAS_INVALID_CONFIG",
   "ZOHO_CPAAS_UNSUPPORTED_REGION",
   "ZOHO_CPAAS_UPLOAD_FAILED",
+  "ZOHO_CPAAS_PROVIDER_REJECTED",
+  "ZOHO_CPAAS_NETWORK_ERROR",
+  "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED",
+  "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG",
+  "ZOHO_CPAAS_STUCK",
+  "ZOHO_CPAAS_UNRECOGNIZED_SUCCESS_BODY",
 ] as const;
 export type ZohoCpaasErrorCode = (typeof zohoCpaasErrorCodes)[number];
+export type ZohoCpaasMessageErrorCode = ZohoCpaasErrorCode;
+export type ZohoCpaasErrorData = {
+  code: ZohoCpaasErrorCode;
+  message: string;
+  providerStatus?: number;
+  providerCode?: string;
+};
+const messages = {
+  ZOHO_CPAAS_IDEMPOTENCY_CONFLICT: "The idempotency key identifies different request content.",
+  ZOHO_CPAAS_ALL_SUPPRESSED: "All email recipients are suppressed.",
+  ZOHO_CPAAS_VALIDATION_FAILED: "An argument is invalid, missing or out of bounds.",
+  ZOHO_CPAAS_NOT_CONFIGURED: "The channel token is missing and test mode is disabled.",
+  ZOHO_CPAAS_INVALID_CONFIG: "A component setting is invalid.",
+  ZOHO_CPAAS_UNSUPPORTED_REGION: "The channel is unavailable at the configured endpoint.",
+  ZOHO_CPAAS_UPLOAD_FAILED: "The provider did not return a usable file cache key.",
+  ZOHO_CPAAS_PROVIDER_REJECTED: "The provider rejected the request.",
+  ZOHO_CPAAS_NETWORK_ERROR: "The send request outcome is unknown.",
+  ZOHO_CPAAS_WORKPOOL_ACTION_FAILED: "The send action ended without reporting an outcome.",
+  ZOHO_CPAAS_RETRY_AFTER_TOO_LONG: "The provider requested a retry delay longer than 24 hours.",
+  ZOHO_CPAAS_STUCK: "The send remained in progress for more than 24 hours.",
+  ZOHO_CPAAS_UNRECOGNIZED_SUCCESS_BODY:
+    "The provider accepted the request without usable identifiers.",
+} as const satisfies Record<ZohoCpaasErrorCode, string>;
 
-export function zohoError(errorCode: ZohoCpaasErrorCode, message: string, retryable?: boolean) {
-  return new ConvexError({
-    code: errorCode,
-    message,
-    ...(retryable === undefined ? {} : { retryable }),
-  });
+export function errorData(
+  code: ZohoCpaasErrorCode,
+  provider: { providerStatus?: number; providerCode?: string } = {},
+): ZohoCpaasErrorData {
+  return {
+    code,
+    message: messages[code],
+    ...(provider.providerStatus === undefined ? {} : { providerStatus: provider.providerStatus }),
+    ...(provider.providerCode === undefined ? {} : { providerCode: provider.providerCode }),
+  };
 }
-
-export function isZohoCpaasError(
-  error: unknown,
-): error is { data: { code: ZohoCpaasErrorCode; message: string; retryable?: boolean } } {
-  if (error === null || typeof error !== "object" || !("data" in error)) return false;
-  const data = error.data;
+export function zohoError(
+  code: ZohoCpaasErrorCode,
+  provider?: { providerStatus?: number; providerCode?: string },
+): ConvexError<ZohoCpaasErrorData> {
+  return new ConvexError(errorData(code, provider));
+}
+export function isZohoCpaasError(error: unknown): error is ConvexError<ZohoCpaasErrorData> {
+  if (!(error instanceof ConvexError)) return false;
+  const data: unknown = error.data;
   return (
-    data !== null &&
-    typeof data === "object" &&
-    "code" in data &&
-    typeof data.code === "string" &&
-    zohoCpaasErrorCodes.some((candidate) => candidate === data.code) &&
-    "message" in data &&
+    isRecord(data) &&
+    zohoCpaasErrorCodes.some((code) => code === data.code) &&
     typeof data.message === "string" &&
-    (!("retryable" in data) || typeof data.retryable === "boolean")
+    (data.providerStatus === undefined ||
+      (typeof data.providerStatus === "number" &&
+        Number.isInteger(data.providerStatus) &&
+        data.providerStatus >= 100 &&
+        data.providerStatus <= 599)) &&
+    (data.providerCode === undefined ||
+      (typeof data.providerCode === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(data.providerCode)))
   );
 }
 
-/**
- * Codes the component itself stores in `message.error.code`. `UNRECOGNIZED_SUCCESS_BODY`
- * is recorded in `message.warning` on an accepted row; the others live on failed rows.
- */
-export const zohoCpaasLocalMessageErrorCodes = [
-  "ZOHO_CPAAS_STUCK",
-  "ZOHO_CPAAS_WORKPOOL_ACTION_FAILED",
-  "ZOHO_CPAAS_NETWORK_ERROR",
-  "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG",
-  "ZOHO_CPAAS_UNRECOGNIZED_SUCCESS_BODY",
-  "ZOHO_CPAAS_NOT_CONFIGURED",
-  "ZOHO_CPAAS_INVALID_CONFIG",
-  "ZOHO_CPAAS_UNSUPPORTED_REGION",
-] as const;
-
-/** Zoho error codes the classifier recognizes; other well-formed Zoho codes are stored verbatim. */
 export const zohoCpaasProviderErrorCodes = [
   "SM_128",
   "SM_133",
@@ -78,19 +100,13 @@ export const zohoCpaasProviderErrorCodes = [
   "WSE_107",
 ] as const;
 
-/**
- * Stored per-message error and warning codes, separate from the codes thrown to callers
- * (`ZohoCpaasErrorCode`). Zoho may return codes beyond the listed provider ones, so
- * `message.error.code` is typed `string`; use this type to narrow known values.
- */
-export type ZohoCpaasMessageErrorCode =
-  | (typeof zohoCpaasLocalMessageErrorCodes)[number]
-  | (typeof zohoCpaasProviderErrorCodes)[number];
-
 export type ClassifiedError = {
   retryable: boolean;
   accountState: boolean;
-  code?: string;
+  explicitZohoCode?: boolean;
+  code: ZohoCpaasErrorCode;
+  providerCode?: string;
+  providerStatus?: number;
   subCode?: string;
   message: string;
   retryAfterMs?: number;
@@ -100,8 +116,8 @@ function record(value: unknown): Record<string, unknown> | null {
   return isRecord(value) ? value : null;
 }
 
-function code(value: unknown): string | undefined {
-  return typeof value === "string" && /^[A-Z][A-Z0-9_]{1,30}$/.test(value) ? value : undefined;
+function parseProviderCode(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]{1,63}$/.test(value) ? value : undefined;
 }
 
 export function parseRetryAfter(
@@ -155,9 +171,12 @@ export function classifyProviderError(
   const data = record(payload?.data);
   const details = Array.isArray(error?.details) ? error.details : [];
   const subCodes = details
-    .map((detail) => code(record(detail)?.code))
+    .map((detail) => parseProviderCode(record(detail)?.code))
     .filter((item) => item !== undefined);
-  const primaryCode = code(error?.code) ?? code(data?.error_code) ?? code(data?.code);
+  const primaryCode =
+    parseProviderCode(error?.code) ??
+    parseProviderCode(data?.error_code) ??
+    parseProviderCode(data?.code);
   const subCode = subCodes[0];
   const accountState = Boolean(
     subCodes.some((item) => accountStateCodes.has(item)) ||
@@ -173,7 +192,9 @@ export function classifyProviderError(
   const tooLong =
     (retryAfterMs !== undefined && retryAfterMs > MAX_RETRY_AFTER_MS) ||
     (numericRetryAfter !== undefined && numericRetryAfter > MAX_RETRY_AFTER_MS);
-  const explicitZohoCode = primaryCode !== undefined || subCode !== undefined;
+  const explicitZohoCode = zohoCpaasProviderErrorCodes.some(
+    (code) => code === primaryCode || subCodes.includes(code),
+  );
   const dailyLimit = subCodes.includes("SMI_115") || primaryCode === "SMI_115";
   const dailyOverride =
     channel === "email" &&
@@ -192,19 +213,12 @@ export function classifyProviderError(
   return {
     retryable,
     accountState,
-    ...(tooLong
-      ? { code: "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG" satisfies ZohoCpaasMessageErrorCode }
-      : primaryCode
-        ? { code: primaryCode }
-        : {}),
+    explicitZohoCode,
+    ...errorData(tooLong ? "ZOHO_CPAAS_RETRY_AFTER_TOO_LONG" : "ZOHO_CPAAS_PROVIDER_REJECTED", {
+      providerStatus: httpStatus,
+      providerCode: primaryCode ?? subCode,
+    }),
     ...(subCode ? { subCode } : {}),
-    message: tooLong
-      ? "Zoho CPaaS requested a retry delay longer than 24 hours"
-      : accountState
-        ? "Zoho CPaaS account requires operator action"
-        : retryable
-          ? "Zoho CPaaS is temporarily unavailable"
-          : "Zoho CPaaS rejected the request",
     ...(retryable && dailyOverride
       ? { retryAfterMs: Math.max(retryAfterMs ?? 0, MAX_RETRY_AFTER_MS) }
       : retryable && retryAfterMs !== undefined
@@ -217,14 +231,12 @@ export function classifyNetworkError(channel: Channel): ClassifiedError {
   return {
     retryable: channel === "email",
     accountState: false,
-    code: "ZOHO_CPAAS_NETWORK_ERROR" satisfies ZohoCpaasMessageErrorCode,
-    message: "Zoho CPaaS request outcome is unknown",
+    ...errorData("ZOHO_CPAAS_NETWORK_ERROR"),
   };
 }
 
-/** Deterministic exponential backoff; attempt one is the first retry. */
 export function retryBackoffMs(attempt: number): number {
   if (!Number.isSafeInteger(attempt) || attempt < 1)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Invalid retry attempt");
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   return Math.min(1000 * 2 ** Math.min(attempt - 1, 16), 60_000);
 }

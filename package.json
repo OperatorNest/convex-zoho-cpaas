@@ -81,10 +81,11 @@
     "smoke": "node scripts/smoke.mjs",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage --coverage.reporter=text",
-    "check": "pnpm fmt:check && pnpm build && pnpm lint && pnpm typecheck && pnpm knip && pnpm test",
+    "check": "pnpm fmt:check && pnpm build && pnpm lint && pnpm typecheck && pnpm knip && pnpm check:source && pnpm test",
     "changeset": "changeset",
     "e2e:env": "node scripts/with-local-lock.mjs node scripts/e2e-env.mjs",
-    "e2e": "node scripts/e2e.mjs"
+    "e2e": "node scripts/e2e.mjs",
+    "check:source": "node scripts/check-source.mjs"
   },
   "dependencies": {
     "@convex-dev/workpool": "0.4.13"
@@ -111,7 +112,7 @@
     "convex-helpers": "^0.1.106"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24"
   },
   "packageManager": "pnpm@12.9.1"
 }

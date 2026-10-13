@@ -10,6 +10,7 @@ export const statusValidator = v.union(
   v.literal("queued"),
   v.literal("sending"),
   v.literal("accepted"),
+  v.literal("unknown"),
   v.literal("delivered"),
   v.literal("read"),
   v.literal("failed"),

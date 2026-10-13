@@ -2,7 +2,6 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** JSON text with object keys sorted at every depth, so equal values digest equally. */
 export function stableStringify(value: unknown): string {
   if (Array.isArray(value))
     return `[${value.map((item) => stableStringify(item ?? null)).join(",")}]`;

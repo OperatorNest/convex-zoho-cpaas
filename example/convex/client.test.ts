@@ -200,10 +200,13 @@ test("source client route verifies signed bodies and maps boundary failures", as
   const body = JSON.stringify({
     webhook_request_id: "client-route-1",
     event_name: ["open"],
-    event_message: [{}],
+    event_message: [{ occurred_at: Date.now(), email_info: {} }],
   });
   const signature = await signWebhook(body);
-  const signed = { headers: { "producer-signature": signature }, body };
+  const signed = {
+    headers: { "producer-signature": signature, "content-type": "application/json" },
+    body,
+  };
 
   expect((await invokeRoute(t, router, path, signed)).status).toBe(500);
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");

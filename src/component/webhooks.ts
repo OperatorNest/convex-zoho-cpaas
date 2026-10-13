@@ -1,4 +1,5 @@
 import { isRecord as asRecord } from "../shared/record.js";
+import { paginator } from "convex-helpers/server/pagination";
 import { v } from "convex/values";
 import type { FunctionHandle } from "convex/server";
 import { normalizeEmail, normalizeRecipient } from "../shared/provider.js";
@@ -8,11 +9,13 @@ import {
   verifyWebhookSignature,
   normalizedWebhookEventValidator,
   maxWebhookBodyBytes,
+  webhookReceiptRetentionMs,
   type NormalizedWebhookEvent,
 } from "../shared/webhook.js";
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { action, env, internalMutation, type MutationCtx } from "./_generated/server.js";
+import schema from "./schema.js";
 import { resolveTestMode } from "./config.js";
 import { sha256Hex } from "../shared/crypto.js";
 
@@ -56,7 +59,7 @@ async function applyEvent(
   ctx: MutationCtx,
   event: NormalizedWebhookEvent,
   message: Doc<"messages">,
-): Promise<void> {
+): Promise<Doc<"messages">> {
   const next = nextStatus(event);
   const patch: Partial<Doc<"messages">> = {};
   if (event.providerRequestId && !message.providerRequestId)
@@ -65,6 +68,8 @@ async function applyEvent(
     patch.providerMessageId = event.providerMessageId;
   if (next && canTransitionStatus(message.status, next, message.channel)) {
     patch.status = next;
+    patch.error = undefined;
+    if (next === "delivered") patch.terminalAt = undefined;
     if (next === "bounced" || next === "complained" || next === "failed" || next === "read")
       patch.terminalAt = Date.now();
     if (
@@ -77,6 +82,7 @@ async function applyEvent(
   }
   if (Object.keys(patch).length) await ctx.db.patch("messages", message._id, patch);
   await addSuppression(ctx, event, message);
+  return { ...message, ...patch };
 }
 
 function envelopeRecipients(event: NormalizedWebhookEvent): string[] {
@@ -98,9 +104,7 @@ function envelopeRecipients(event: NormalizedWebhookEvent): string[] {
       if (typeof address !== "string") continue;
       try {
         found.add(normalizeEmail(address));
-      } catch {
-        // Ignore invalid provider-controlled addresses.
-      }
+      } catch {}
     }
   }
   return [...found];
@@ -135,75 +139,119 @@ async function addSuppression(
     });
 }
 
+type Match = { message: Doc<"messages"> | null; ambiguous: boolean };
+type LookupKind = "request" | "reference" | "message";
+type LookupCache = Map<string, { kind: LookupKind; rows: Doc<"messages">[] }>;
+
+function recipientOf(event: NormalizedWebhookEvent): string | null | undefined {
+  if (event.recipient === undefined) return undefined;
+  if (event.channel === "unknown") return null;
+  try {
+    return normalizeRecipient(event.channel, event.recipient);
+  } catch {
+    return null;
+  }
+}
+function compatible(
+  row: Doc<"messages">,
+  event: NormalizedWebhookEvent,
+  recipient: string | undefined,
+): boolean {
+  return (
+    row.channel === event.channel &&
+    (!recipient || row.to === recipient) &&
+    (!event.clientReference || row.clientReference === event.clientReference) &&
+    (!event.providerRequestId ||
+      !row.providerRequestId ||
+      row.providerRequestId === event.providerRequestId) &&
+    (!event.providerMessageId ||
+      !row.providerMessageId ||
+      row.providerMessageId === event.providerMessageId)
+  );
+}
+function selectMatch(
+  rows: Doc<"messages">[],
+  event: NormalizedWebhookEvent,
+  recipient: string | undefined,
+): Match {
+  if (rows.length > 1) return { message: null, ambiguous: true };
+  const row = rows[0];
+  return { message: row && compatible(row, event, recipient) ? row : null, ambiguous: false };
+}
 async function findMessage(
   ctx: MutationCtx,
   event: NormalizedWebhookEvent,
-): Promise<{ message: Doc<"messages"> | null; ambiguous: boolean }> {
+  cache: LookupCache,
+): Promise<Match> {
   if (event.channel === "unknown") return { message: null, ambiguous: false };
-  let recipient: string | undefined;
-  try {
-    recipient = event.recipient ? normalizeRecipient(event.channel, event.recipient) : undefined;
-  } catch {
-    recipient = undefined;
-  }
-  if (event.providerRequestId && recipient) {
-    const exact = await ctx.db
-      .query("messages")
-      .withIndex("by_providerRequestId_and_to", (q) =>
-        q.eq("providerRequestId", event.providerRequestId).eq("to", recipient),
-      )
-      .unique();
-    if (exact && exact.channel === event.channel) return { message: exact, ambiguous: false };
-  }
-  let fallbackAmbiguous = false;
-  if (event.providerRequestId && event.channel === "email") {
-    const candidates = envelopeRecipients(event);
-    const addresses = [...new Set([...(recipient ? [recipient] : []), ...candidates])];
-    const matching: Doc<"messages">[] = [];
-    for (const address of addresses) {
-      const row = await ctx.db
-        .query("messages")
-        .withIndex("by_providerRequestId_and_to", (q) =>
-          q.eq("providerRequestId", event.providerRequestId).eq("to", address),
-        )
-        .unique();
-      if (row?.channel === "email" && !matching.some((candidate) => candidate._id === row._id))
-        matching.push(row);
+  const recipient = recipientOf(event);
+  if (recipient === null) return { message: null, ambiguous: false };
+  const lookup = async (
+    key: [LookupKind, ...unknown[]],
+    read: () => Promise<Doc<"messages">[]>,
+  ) => {
+    const encoded = JSON.stringify(key);
+    const cached = cache.get(encoded);
+    if (cached) return cached.rows;
+    const rows = await read();
+    cache.set(encoded, { kind: key[0], rows });
+    return rows;
+  };
+  let ambiguous = false;
+  const consider = (rows: Doc<"messages">[]) => {
+    const result = selectMatch(rows, event, recipient);
+    ambiguous ||= result.ambiguous;
+    return result.message;
+  };
+  if (event.providerRequestId) {
+    const addresses = recipient ? [recipient] : envelopeRecipients(event);
+    if (addresses.length > 1) ambiguous = true;
+    if (addresses.length === 1) {
+      const address = addresses[0];
+      if (address) {
+        const rows = await lookup(
+          ["request", event.channel, event.providerRequestId, address],
+          () =>
+            ctx.db
+              .query("messages")
+              .withIndex("by_providerRequestId_and_to", (q) =>
+                q.eq("providerRequestId", event.providerRequestId).eq("to", address),
+              )
+              .take(2),
+        );
+        const message = consider(rows);
+        if (message) return { message, ambiguous: false };
+      }
     }
-    if (matching.length === 1 && matching[0]) return { message: matching[0], ambiguous: false };
-    fallbackAmbiguous = matching.length > 1;
   }
   if (event.clientReference) {
-    const clientReference = event.clientReference;
-    const matches = await ctx.db
-      .query("messages")
-      .withIndex("by_clientReference", (q) => q.eq("clientReference", clientReference))
-      .take(501);
-    const eligible = matches.filter(
-      (row) =>
-        row.channel === event.channel &&
-        (!recipient || row.to === recipient) &&
-        (!event.providerRequestId ||
-          !row.providerRequestId ||
-          row.providerRequestId === event.providerRequestId),
+    const channel = event.channel;
+    const referenceValue = event.clientReference;
+    const rows = await lookup(["reference", event.channel, event.clientReference, recipient], () =>
+      ctx.db
+        .query("messages")
+        .withIndex("by_channel_and_clientReference_and_to", (q) => {
+          const reference = q.eq("channel", channel).eq("clientReference", referenceValue);
+          return recipient ? reference.eq("to", recipient) : reference;
+        })
+        .take(2),
     );
-    if (matches.length < 501 && eligible.length === 1)
-      return { message: eligible[0] ?? null, ambiguous: false };
-    if (matches.length < 501 && eligible.length > 1) fallbackAmbiguous = true;
+    const message = consider(rows);
+    if (message) return { message, ambiguous: false };
   }
   if (event.providerMessageId) {
-    const matches = await ctx.db
-      .query("messages")
-      .withIndex("by_providerMessageId", (q) => q.eq("providerMessageId", event.providerMessageId))
-      .take(2);
-    const eligible = matches.filter(
-      (row) => row.channel === event.channel && (!recipient || row.to === recipient),
+    const rows = await lookup(["message", event.providerMessageId], () =>
+      ctx.db
+        .query("messages")
+        .withIndex("by_providerMessageId", (q) =>
+          q.eq("providerMessageId", event.providerMessageId),
+        )
+        .take(2),
     );
-    if (matches.length < 2 && eligible.length === 1)
-      return { message: eligible[0] ?? null, ambiguous: false };
-    if (matches.length < 2 && eligible.length > 1) fallbackAmbiguous = true;
+    const message = consider(rows);
+    if (message) return { message, ambiguous: false };
   }
-  return { message: null, ambiguous: fallbackAmbiguous };
+  return { message: null, ambiguous };
 }
 
 export const commit = internalMutation({
@@ -217,12 +265,16 @@ export const commit = internalMutation({
   handler: async (ctx, args) => {
     const old = await ctx.db
       .query("webhookReceipts")
-      .withIndex("by_providerEventId", (q) => q.eq("providerEventId", args.providerEventId))
+      .withIndex("by_providerEventId_and_reason", (q) =>
+        q.eq("providerEventId", args.providerEventId).eq("reason", undefined),
+      )
       .unique();
     if (old) return { duplicate: true };
     const sameBody = await ctx.db
       .query("webhookReceipts")
-      .withIndex("by_bodyHash", (q) => q.eq("bodyHash", args.bodyHash))
+      .withIndex("by_bodyHash_and_reason", (q) =>
+        q.eq("bodyHash", args.bodyHash).eq("reason", undefined),
+      )
       .unique();
     if (sameBody) return { duplicate: true };
     await ctx.db.insert("webhookReceipts", {
@@ -239,12 +291,13 @@ export const commit = internalMutation({
         const key = JSON.stringify(event.raw);
         terminalRawCounts.set(key, (terminalRawCounts.get(key) ?? 0) + 1);
       }
+    const cache: LookupCache = new Map();
     for (const event of args.events) {
       const duplicateRaw = (terminalRawCounts.get(JSON.stringify(event.raw)) ?? 0) > 1;
       const matched = duplicateRaw
         ? { message: null, ambiguous: true }
-        : await findMessage(ctx, event);
-      const message = matched.message;
+        : await findMessage(ctx, event, cache);
+      const message = matched.message ? await ctx.db.get("messages", matched.message._id) : null;
       const ambiguous = duplicateRaw || matched.ambiguous;
       await ctx.db.insert("events", {
         ...(message ? { messageId: message._id } : {}),
@@ -261,10 +314,22 @@ export const commit = internalMutation({
         ambiguous,
         ...(message?.testMode || resolveTestMode(undefined) ? { testMode: true } : {}),
       });
-      if (message) await applyEvent(ctx, event, message);
-      else if (!ambiguous) await addSuppression(ctx, event);
+      if (message) {
+        const updated = await applyEvent(ctx, event, message);
+        for (const [key, entry] of cache) {
+          if (
+            (entry.kind === "request" && updated.providerRequestId !== message.providerRequestId) ||
+            (entry.kind === "message" && updated.providerMessageId !== message.providerMessageId)
+          )
+            cache.delete(key);
+          else
+            cache.set(key, {
+              kind: entry.kind,
+              rows: entry.rows.map((row) => (row._id === updated._id ? updated : row)),
+            });
+        }
+      } else if (!ambiguous) await addSuppression(ctx, event);
       if (args.callbackHandle) {
-        // Function handles originate from createFunctionHandle in the app route.
         // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Convex serializes function handles as strings
         await ctx.runMutation(args.callbackHandle as FunctionHandle<"mutation">, {
           event,
@@ -281,112 +346,74 @@ export async function reconcileRequestEvents(
   ctx: MutationCtx,
   requestId: string,
   messageIds: Id<"messages">[],
+  cursor: string | null = null,
 ): Promise<void> {
-  const events = await ctx.db
+  const page = await paginator(ctx.db, schema)
     .query("events")
     .withIndex("by_providerRequestId_and_recipient", (q) => q.eq("providerRequestId", requestId))
-    .take(501);
-  if (events.length > 500) return;
+    .paginate({ cursor, numItems: 100, maximumRowsRead: 100, maximumBytesRead: 512 * 1024 });
   const messages: Doc<"messages">[] = [];
   for (const id of messageIds) {
     const row = await ctx.db.get("messages", id);
     if (row) messages.push(row);
   }
-  for (const event of events) {
-    if (event.messageId) continue;
-    let recipient: string | undefined;
-    try {
-      recipient = event.recipient
-        ? normalizeRecipient(event.channel === "unknown" ? "email" : event.channel, event.recipient)
-        : undefined;
-    } catch {
-      continue;
-    }
-    let storedRaw: unknown;
-    try {
-      storedRaw = JSON.parse(event.raw);
-    } catch {
-      storedRaw = null;
-    }
-    const candidates =
-      event.channel === "email"
-        ? envelopeRecipients({
-            providerEventId: event.providerEventId,
-            type: recognizedEventType(event.type),
-            channel: event.channel,
-            occurredAt: event.occurredAt,
-            raw: storedRaw,
-          })
-        : [];
-    const addresses = new Set([...(recipient ? [recipient] : []), ...candidates]);
-    let fallbackAmbiguous = false;
-    let match: Doc<"messages"> | undefined;
-    if (recipient) {
-      const exact = messages.filter((row) => row.channel === event.channel && row.to === recipient);
-      if (exact.length === 1) match = exact[0];
-      else if (exact.length > 1) fallbackAmbiguous = true;
-    }
-    if (!match && event.clientReference) {
-      const byReference = messages.filter(
-        (row) =>
-          row.channel === event.channel &&
-          row.clientReference === event.clientReference &&
-          (!event.providerRequestId ||
-            !row.providerRequestId ||
-            row.providerRequestId === event.providerRequestId),
-      );
-      if (byReference.length === 1) match = byReference[0];
-      else if (byReference.length > 1) fallbackAmbiguous = true;
-    }
-    if (!match && event.providerMessageId) {
-      const byProviderId = messages.filter(
-        (row) =>
-          row.channel === event.channel &&
-          row.providerMessageId === event.providerMessageId &&
-          (!recipient || row.to === recipient),
-      );
-      if (byProviderId.length === 1) match = byProviderId[0];
-      else if (byProviderId.length > 1) fallbackAmbiguous = true;
-    }
-    if (!match) {
-      const fallback = messages.filter(
-        (row) => row.channel === event.channel && (addresses.size === 0 || addresses.has(row.to)),
-      );
-      if (fallback.length === 1) match = fallback[0];
-      else if (fallback.length > 1) fallbackAmbiguous = true;
-    }
-    if (!match) {
-      if (fallbackAmbiguous) await ctx.db.patch("events", event._id, { ambiguous: true });
-      continue;
-    }
-    const message = await ctx.db.get("messages", match._id);
-    if (!message) continue;
-    await ctx.db.patch("events", event._id, { messageId: message._id, ambiguous: false });
+  for (const stored of page.page) {
+    if (stored.messageId || stored.ambiguous) continue;
     let raw: unknown;
     try {
-      raw = JSON.parse(event.raw);
+      raw = JSON.parse(stored.raw);
     } catch {
       raw = null;
     }
-    await applyEvent(
-      ctx,
-      {
-        providerEventId: event.providerEventId,
-        channel: event.channel,
-        type: recognizedEventType(event.type),
-        occurredAt: event.occurredAt,
-        ...(event.recipient ? { recipient: event.recipient } : {}),
-        ...(event.providerRequestId ? { providerRequestId: event.providerRequestId } : {}),
-        ...(event.providerMessageId ? { providerMessageId: event.providerMessageId } : {}),
-        ...(event.clientReference ? { clientReference: event.clientReference } : {}),
-        raw,
-      },
-      message,
+    const event: NormalizedWebhookEvent = {
+      providerEventId: stored.providerEventId,
+      channel: stored.channel,
+      type: recognizedEventType(stored.type),
+      occurredAt: stored.occurredAt,
+      recipient: stored.recipient,
+      providerRequestId: stored.providerRequestId,
+      providerMessageId: stored.providerMessageId,
+      clientReference: stored.clientReference,
+      raw,
+    };
+    const recipient = recipientOf(event);
+    if (recipient === null) continue;
+    const envelope = recipient === undefined ? envelopeRecipients(event) : [];
+    const candidates = messages.filter(
+      (row) =>
+        compatible(row, event, recipient) &&
+        (recipient !== undefined || envelope.length === 0 || envelope.includes(row.to)),
     );
-    if (message.testMode || resolveTestMode(undefined))
-      await ctx.db.patch("events", event._id, { testMode: true });
+    if (candidates.length !== 1) {
+      if (candidates.length > 1) await ctx.db.patch("events", stored._id, { ambiguous: true });
+      continue;
+    }
+    const candidate = candidates[0];
+    if (!candidate) continue;
+    const message = await ctx.db.get("messages", candidate._id);
+    if (!message) continue;
+    await ctx.db.patch("events", stored._id, {
+      messageId: message._id,
+      ambiguous: false,
+      testMode: message.testMode || resolveTestMode(undefined),
+    });
+    await applyEvent(ctx, event, message);
   }
+  if (!page.isDone)
+    await ctx.scheduler.runAfter(0, internal.webhooks.reconcile, {
+      requestId,
+      messageIds,
+      cursor: page.continueCursor,
+    });
 }
+export const reconcile = internalMutation({
+  args: { requestId: v.string(), messageIds: v.array(v.id("messages")), cursor: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await reconcileRequestEvents(ctx, args.requestId, args.messageIds, args.cursor);
+    return null;
+  },
+});
 
 export const receive = action({
   args: {
@@ -447,10 +474,20 @@ export const receive = action({
       !/^(application\/json|application\/x-www-form-urlencoded)(\s*;|\s*$)/i.test(args.contentType)
     )
       return invalidPayload();
-    const parsed = parseWebhookBody(signed);
+    const missingEventTimestamp = 0;
+    const parsed = parseWebhookBody(signed, missingEventTimestamp);
     if (!parsed) return invalidPayload();
     if (parsed.events.length === 0 || parsed.events.every((event) => event.channel === "unknown"))
       return invalidPayload();
+    const now = Date.now();
+    const oldestEvent = now - webhookReceiptRetentionMs(env.ZOHO_CPAAS_RETENTION_DAYS) + 86_400_000;
+    const latestEvent = now + 5 * 60 * 1000;
+    if (
+      parsed.events.some(
+        (event) => event.occurredAt < oldestEvent || event.occurredAt > latestEvent,
+      )
+    )
+      return { duplicate: false, reason: "invalid_signature" };
     if (
       parsed.events.length > 500 ||
       new TextEncoder().encode(JSON.stringify(parsed.events)).byteLength > 256 * 1024
@@ -471,9 +508,11 @@ export const recordFailure = internalMutation({
   handler: async (ctx, args) => {
     const old = await ctx.db
       .query("webhookReceipts")
-      .withIndex("by_bodyHash", (q) => q.eq("bodyHash", args.bodyHash))
+      .withIndex("by_bodyHash_and_reason", (q) =>
+        q.eq("bodyHash", args.bodyHash).eq("reason", args.reason),
+      )
       .unique();
-    if (old) return { duplicate: true };
+    if (old) return { duplicate: false };
     await ctx.db.insert("webhookReceipts", {
       providerEventId: `invalid:${args.bodyHash}`,
       bodyHash: args.bodyHash,

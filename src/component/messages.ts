@@ -1,17 +1,17 @@
 import { paginator } from "convex-helpers/server/pagination";
 import { paginationOptsValidator, paginationResultValidator } from "convex/server";
-import { ConvexError, v, type Infer } from "convex/values";
+import { v, type Infer } from "convex/values";
 import {
   buildEmailPayload,
   buildSmsPayload,
   buildWhatsappPayload,
   normalizeEmail,
   normalizeRecipient,
-  isIndiaBaseUrl,
   type EmailAddress,
   type EmailRecipient,
 } from "../shared/provider.js";
 import { zohoError } from "../shared/errors.js";
+import { boundedPage, boundedString } from "../shared/bounds.js";
 import { sha256Hex } from "../shared/crypto.js";
 import { stableStringify } from "../shared/record.js";
 import {
@@ -25,7 +25,7 @@ import {
 } from "../shared/validators.js";
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
-import { env, mutation, query, type MutationCtx } from "./_generated/server.js";
+import { env, mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 import schema, { statusValidator } from "./schema.js";
 import { providerConfiguration, resolveTestMode, tokenFor } from "./config.js";
 import { pool } from "./pool.js";
@@ -43,14 +43,6 @@ function assertSendConfiguration(channel: Channel, testMode: boolean): void {
   providerConfiguration(channel);
 }
 
-function publicSend<T>(work: () => Promise<T>): Promise<T> {
-  return work().catch((error: unknown) => {
-    if (error instanceof ConvexError) throw error;
-    const message = error instanceof Error ? error.message : "Send request validation failed";
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", message);
-  });
-}
-
 async function suppressed(ctx: MutationCtx, channel: Channel, address: string): Promise<boolean> {
   const row = await ctx.db
     .query("suppressions")
@@ -65,8 +57,8 @@ async function existingIds(
   request: string,
 ): Promise<Id<"messages">[] | null> {
   if (key === undefined) return null;
-  if (!key.trim())
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Idempotency key must not be blank");
+  boundedString(key, 200);
+  if (!key.trim()) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   const job = await ctx.db
     .query("sendJobs")
     .withIndex("by_idempotencyKey", (q) => q.eq("idempotencyKey", key))
@@ -74,12 +66,8 @@ async function existingIds(
     .first();
   if (!job) return null;
   if (job.requestHash !== (await sha256Hex(request)))
-    throw zohoError(
-      "ZOHO_CPAAS_IDEMPOTENCY_CONFLICT",
-      "Idempotency key was used for a different request",
-    );
-  // Suppressed rows never reached the provider, so they are neutral: replay is
-  // allowed when every other row definitively failed or was canceled unsent.
+    throw zohoError("ZOHO_CPAAS_IDEMPOTENCY_CONFLICT");
+
   let definitive = 0;
   let allDefinitive = true;
   for (const id of job.messageIds) {
@@ -116,43 +104,28 @@ async function enqueueEmail(
   const allTo: EmailRecipient[] = args.to.map((item) =>
     "emailAddress" in item ? item : { emailAddress: item },
   );
-  if (!allTo.length)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Email requires at least one to recipient");
+  if (!allTo.length) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   if (
     allTo.length > 500 ||
     (args.cc?.length ?? 0) > 500 ||
     (args.bcc?.length ?? 0) > 500 ||
     (args.replyTo?.length ?? 0) > 500
   )
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Email recipient limit is 500 per field");
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   if (batch && allTo.length + (args.cc?.length ?? 0) + (args.bcc?.length ?? 0) > 500)
-    throw zohoError(
-      "ZOHO_CPAAS_VALIDATION_FAILED",
-      "Email batch recipient limit is 500 across to, cc, and bcc",
-    );
-  if (batch && !allTo.length)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Email batch requires a to recipient");
-  try {
-    buildEmailPayload(
-      args,
-      batch ? allTo : allTo.map((r) => r.emailAddress),
-      args.clientReference ?? "validation",
-    );
-  } catch (error) {
-    throw zohoError(
-      "ZOHO_CPAAS_VALIDATION_FAILED",
-      error instanceof Error ? error.message : "Invalid email send",
-    );
-  }
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  if (batch && !allTo.length) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  buildEmailPayload(
+    args,
+    batch ? allTo : allTo.map((r) => r.emailAddress),
+    args.clientReference ?? "validation",
+  );
   if (
     batch &&
     !args.clientReference &&
     allTo.some((r) => Object.hasOwn(r.mergeInfo ?? {}, "__onx_ref"))
   )
-    throw zohoError(
-      "ZOHO_CPAAS_VALIDATION_FAILED",
-      "mergeInfo key __onx_ref is reserved for per-recipient correlation",
-    );
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   const preparedTo: EmailRecipient[] = [];
   const preparedCc: EmailAddress[] = [];
   const preparedBcc: EmailAddress[] = [];
@@ -160,8 +133,7 @@ async function enqueueEmail(
   const seen = new Set<string>();
   for (const item of allTo) {
     const address = normalizeEmail(item.emailAddress.address);
-    if (seen.has(address))
-      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Duplicate recipient across email fields");
+    if (seen.has(address)) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
     seen.add(address);
     const isSuppressed = await suppressed(ctx, "email", address);
     recipients.push({ to: address, status: isSuppressed ? "suppressed" : "queued" });
@@ -177,8 +149,7 @@ async function enqueueEmail(
   ] as const) {
     for (const item of source) {
       const address = normalizeEmail(item.address);
-      if (seen.has(address))
-        throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Duplicate recipient across email fields");
+      if (seen.has(address)) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
       seen.add(address);
       const isSuppressed = await suppressed(ctx, "email", address);
       recipients.push({ to: address, status: isSuppressed ? "suppressed" : "queued" });
@@ -186,12 +157,9 @@ async function enqueueEmail(
     }
   }
   if (!preparedTo.length && (preparedCc.length || preparedBcc.length))
-    throw zohoError(
-      "ZOHO_CPAAS_VALIDATION_FAILED",
-      "Email requires a deliverable to recipient when cc or bcc is deliverable",
-    );
+    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   if (recipients.every((r) => r.status === "suppressed"))
-    throw zohoError("ZOHO_CPAAS_ALL_SUPPRESSED", "All email recipients are suppressed");
+    throw zohoError("ZOHO_CPAAS_ALL_SUPPRESSED");
   const now = Date.now();
   const ids: Id<"messages">[] = [];
   const region = env.ZOHO_CPAAS_REGION ?? "us";
@@ -200,7 +168,7 @@ async function enqueueEmail(
       await ctx.db.insert("messages", {
         channel: "email",
         to: recipient.to,
-        from: args.from.address.trim(),
+        from: normalizeEmail(args.from.address),
         status: recipient.status,
         clientReference: args.clientReference ?? "pending",
         attempts: 0,
@@ -212,8 +180,7 @@ async function enqueueEmail(
       }),
     );
   }
-  if (!ids.length)
-    throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "At least one recipient is required");
+  if (!ids.length) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
   const firstQueued = recipients.findIndex((r) => r.status === "queued");
   const clientReference =
     args.clientReference ??
@@ -229,8 +196,7 @@ async function enqueueEmail(
       if (!recipient || recipient.status !== "queued") continue;
       const item = preparedTo[queuedIndex];
       const id = ids[index];
-      if (!item || !id)
-        throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Invalid batch recipient state");
+      if (!item || !id) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
       preparedTo[queuedIndex] = {
         ...item,
         mergeInfo: {
@@ -270,22 +236,22 @@ async function enqueueEmail(
 export const send = mutation({
   args: emailSendArgs.fields,
   returns: idsValidator,
-  handler: (ctx, args) => publicSend(() => enqueueEmail(ctx, args, "/email", false)),
+  handler: (ctx, args) => enqueueEmail(ctx, args, "/email", false),
 });
 export const sendTemplate = mutation({
   args: emailTemplateArgs.fields,
   returns: idsValidator,
-  handler: (ctx, args) => publicSend(() => enqueueEmail(ctx, args, "/email/template", false)),
+  handler: (ctx, args) => enqueueEmail(ctx, args, "/email/template", false),
 });
 export const sendBatch = mutation({
   args: emailBatchArgs.fields,
   returns: idsValidator,
-  handler: (ctx, args) => publicSend(() => enqueueEmail(ctx, args, "/email/batch", true)),
+  handler: (ctx, args) => enqueueEmail(ctx, args, "/email/batch", true),
 });
 export const sendTemplateBatch = mutation({
   args: emailTemplateBatchArgs.fields,
   returns: idsValidator,
-  handler: (ctx, args) => publicSend(() => enqueueEmail(ctx, args, "/email/template/batch", true)),
+  handler: (ctx, args) => enqueueEmail(ctx, args, "/email/template/batch", true),
 });
 
 async function enqueueTemplate(
@@ -295,29 +261,22 @@ async function enqueueTemplate(
 ) {
   const testMode = resolveTestMode(args.testMode);
   assertSendConfiguration(channel, testMode);
-  if (
-    channel === "sms" &&
-    !testMode &&
-    env.ZOHO_CPAAS_REGION !== "in" &&
-    !isIndiaBaseUrl(env.ZOHO_CPAAS_BASE_URL)
-  ) {
-    console.warn("ZOHO_CPAAS_UNSUPPORTED_REGION");
-    throw zohoError("ZOHO_CPAAS_UNSUPPORTED_REGION", "SMS is available in the India region only");
-  }
   const request = stableStringify({ channel, args });
   const prior = await existingIds(ctx, args.idempotencyKey, request);
   if (prior) {
     const first = prior[0];
-    if (!first) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Existing send has no message");
+    if (!first) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
     return first;
   }
   const to = normalizeRecipient(channel, args.to);
   const isSuppressed = await suppressed(ctx, channel, to);
+  if ("senderKey" in args) buildSmsPayload(args, args.clientReference ?? "validation");
+  else buildWhatsappPayload(args, args.clientReference ?? "validation");
   const now = Date.now();
   const id = await ctx.db.insert("messages", {
     channel,
     to,
-    from: "senderKey" in args ? args.senderKey : args.from,
+    from: "senderKey" in args ? args.senderKey : normalizeRecipient("whatsapp", args.from),
     status: isSuppressed ? "suppressed" : "queued",
     clientReference: args.clientReference ?? "pending",
     attempts: 0,
@@ -360,18 +319,24 @@ async function enqueueTemplate(
 export const sendSmsTemplate = mutation({
   args: smsTemplateArgs.fields,
   returns: v.id("messages"),
-  handler: (ctx, args) => publicSend(() => enqueueTemplate(ctx, args, "sms")),
+  handler: (ctx, args) => enqueueTemplate(ctx, args, "sms"),
 });
 export const sendWhatsappTemplate = mutation({
   args: whatsappTemplateArgs.fields,
   returns: v.id("messages"),
-  handler: (ctx, args) => publicSend(() => enqueueTemplate(ctx, args, "whatsapp")),
+  handler: (ctx, args) => enqueueTemplate(ctx, args, "whatsapp"),
 });
 
+function messageIdOrThrow(ctx: Pick<QueryCtx, "db">, value: string): Id<"messages"> {
+  const id = ctx.db.normalizeId("messages", value);
+  if (!id) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+  return id;
+}
+
 export const getMessage = query({
-  args: { messageId: v.id("messages") },
+  args: { messageId: v.string() },
   returns: v.union(schema.doc("messages"), v.null()),
-  handler: (ctx, { messageId }) => ctx.db.get("messages", messageId),
+  handler: (ctx, { messageId }) => ctx.db.get("messages", messageIdOrThrow(ctx, messageId)),
 });
 export const listMessages = query({
   args: {
@@ -383,57 +348,82 @@ export const listMessages = query({
   returns: paginationResultValidator(schema.doc("messages")),
   handler: async (ctx, args) => {
     if (Boolean(args.recipient) === Boolean(args.status))
-      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Specify exactly one of recipient or status");
+      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
     if (args.recipient) {
-      if (!args.channel)
-        throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Channel is required with recipient");
+      if (!args.channel) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
       const recipient = normalizeRecipient(args.channel, args.recipient);
       return paginator(ctx.db, schema)
         .query("messages")
         .withIndex("by_to_and_createdAt", (q) => q.eq("to", recipient))
         .order("desc")
-        .paginate(args.paginationOpts);
+        .paginate(boundedPage(args.paginationOpts));
     }
-    if (!args.status) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Status is required");
-    if (args.channel)
-      throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED", "Channel applies only with recipient");
+    if (!args.status) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
+    if (args.channel) throw zohoError("ZOHO_CPAAS_VALIDATION_FAILED");
     const status = args.status;
     return paginator(ctx.db, schema)
       .query("messages")
       .withIndex("by_status_and_createdAt", (q) => q.eq("status", status))
       .order("desc")
-      .paginate(args.paginationOpts);
+      .paginate(boundedPage(args.paginationOpts));
   },
 });
 export const listEvents = query({
-  args: { messageId: v.id("messages"), paginationOpts: paginationOptsValidator },
+  args: { messageId: v.string(), paginationOpts: paginationOptsValidator },
   returns: paginationResultValidator(schema.doc("events")),
   handler: (ctx, args) =>
     paginator(ctx.db, schema)
       .query("events")
-      .withIndex("by_messageId_and_occurredAt", (q) => q.eq("messageId", args.messageId))
+      .withIndex("by_messageId_and_occurredAt", (q) =>
+        q.eq("messageId", messageIdOrThrow(ctx, args.messageId)),
+      )
       .order("desc")
-      .paginate(args.paginationOpts),
+      .paginate(boundedPage(args.paginationOpts)),
 });
 export const cancel = mutation({
-  args: { messageId: v.id("messages") },
+  args: { messageId: v.string() },
   returns: v.boolean(),
   handler: async (ctx, { messageId }) => {
-    const row = await ctx.db.get("messages", messageId);
-    if (!row || row.status !== "queued") return false;
-    await ctx.db.patch("messages", messageId, { status: "canceled", terminalAt: Date.now() });
+    const id = messageIdOrThrow(ctx, messageId);
+    const row = await ctx.db.get("messages", id);
+    if (!row || row.canceledAt !== undefined) return false;
+    if (row.status !== "queued") {
+      if (row.status !== "unknown" || !row.jobId) return false;
+      const job = await ctx.db.get("sendJobs", row.jobId);
+      if (!job || job.finishedAt !== undefined) return false;
+    }
+    await ctx.db.patch("messages", id, {
+      status: row.failureDefinitive === false ? "unknown" : "canceled",
+      canceledAt: Date.now(),
+      terminalAt: Date.now(),
+    });
     if (row.jobId) {
       const job = await ctx.db.get("sendJobs", row.jobId);
       if (job) {
         const queuedSibling = await ctx.db
           .query("messages")
-          .withIndex("by_jobId_and_status", (q) => q.eq("jobId", row.jobId).eq("status", "queued"))
+          .withIndex("by_jobId_and_status_and_canceledAt", (q) =>
+            q.eq("jobId", row.jobId).eq("status", "queued"),
+          )
           .take(1);
         const sendingSibling = await ctx.db
           .query("messages")
-          .withIndex("by_jobId_and_status", (q) => q.eq("jobId", row.jobId).eq("status", "sending"))
+          .withIndex("by_jobId_and_status_and_canceledAt", (q) =>
+            q.eq("jobId", row.jobId).eq("status", "sending"),
+          )
           .take(1);
-        if (queuedSibling.length === 0 && sendingSibling.length === 0 && job.workId) {
+        const unknownSibling = await ctx.db
+          .query("messages")
+          .withIndex("by_jobId_and_status_and_canceledAt", (q) =>
+            q.eq("jobId", row.jobId).eq("status", "unknown").eq("canceledAt", undefined),
+          )
+          .take(1);
+        if (
+          queuedSibling.length === 0 &&
+          sendingSibling.length === 0 &&
+          unknownSibling.length === 0 &&
+          job.workId
+        ) {
           await pool.cancel(ctx, job.workId);
         }
       }

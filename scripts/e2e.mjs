@@ -1,4 +1,3 @@
-// Interactive maintainer verification against a real Zoho account on an existing local deployment.
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -143,7 +142,7 @@ function startDev() {
       120_000,
     );
     const onData = (chunk) => {
-      output = `${output}${chunk}`.slice(-4000);
+      output = Array.from(`${output}${chunk}`).slice(-4000).join("");
       if (/functions ready/i.test(output)) {
         clearTimeout(timeout);
         resolve();
@@ -186,7 +185,7 @@ function startTunnel(site) {
       90_000,
     );
     const onData = (chunk) => {
-      output = `${output}${chunk}`.slice(-8000);
+      output = Array.from(`${output}${chunk}`).slice(-8000).join("");
       const match = output.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com\b/i);
       if (match) {
         clearTimeout(timeout);
@@ -217,9 +216,7 @@ async function stopProcess(proc) {
   await Promise.race([new Promise((resolve) => proc.child.once("exit", resolve)), sleep(5000)]);
   try {
     process.kill(-proc.child.pid, "SIGKILL");
-  } catch {
-    /* exited */
-  }
+  } catch {}
 }
 
 async function waitFor(fn, label, timeoutMs = 120_000) {
@@ -414,7 +411,7 @@ function updateVerifiedDocs(report, observationPath) {
     "README.md",
     readme.replace(
       /^\*\*Verified against:\*\*.*$/m,
-      `**Verified against:** Zoho CPaaS ${report.region.toUpperCase()} account on ${date}: real email send and signed webhook verification, application, callback, and replay deduplication. See [the dated result](${observationPath}).`,
+      `**Verified against:** Zoho CPaaS ${report.region.toUpperCase()} account on ${date}: real email send and signed webhook verification, application, callback, and replay deduplication. See [the dated result](https://github.com/OperatorNest/convex-zoho-cpaas/blob/main/${observationPath}).`,
     ),
   );
 }
