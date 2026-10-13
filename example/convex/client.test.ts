@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { httpRouter, type HttpRouter } from "convex/server";
 import { afterEach, expect, test, vi } from "vitest";
-import { ZohoCpaas, isZohoCpaasError, registerRoutes } from "../../src/client/index.js";
+import { ZohoCpaas, isZohoCpaasError } from "../../src/client/index.js";
 import { atOrThrow, createEventTimeFields, signWebhook } from "../../src/test-helpers.js";
 import { register } from "../../src/test.js";
 import { components } from "./_generated/api.js";
@@ -147,9 +147,6 @@ test("every public client method forwards to its component function", async () =
   const classRouter = httpRouter();
   client.registerRoutes(classRouter, { path: "/client-hook" });
   expect(classRouter.lookup("/client-hook", "POST")).not.toBeNull();
-  const router = httpRouter();
-  registerRoutes(router, components.zohoCpaas, { path: "/standalone-hook" });
-  expect(router.lookup("/standalone-hook", "POST")).not.toBeNull();
 });
 
 test("client reports a structured error for a missing from address", async () => {
@@ -195,7 +192,7 @@ test("source client route verifies signed bodies and maps boundary failures", as
   vi.setSystemTime(new Date("2026-10-04T00:00:00Z"));
   const t = fresh();
   const router = httpRouter();
-  registerRoutes(router, components.zohoCpaas, { path: "/direct-webhook" });
+  new ZohoCpaas(components.zohoCpaas).registerRoutes(router, { path: "/direct-webhook" });
   const path = "/direct-webhook";
   const body = JSON.stringify({
     webhook_request_id: "client-route-1",
@@ -223,7 +220,7 @@ test("source client route verifies signed bodies and maps boundary failures", as
         body,
       })
     ).status,
-  ).toBe(400);
+  ).toBe(401);
   expect(
     (
       await invokeRoute(t, router, path, {
@@ -231,7 +228,7 @@ test("source client route verifies signed bodies and maps boundary failures", as
         body,
       })
     ).status,
-  ).toBe(413);
+  ).toBe(400);
   expect(
     (
       await invokeRoute(t, router, path, {

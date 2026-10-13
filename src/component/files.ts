@@ -2,7 +2,8 @@ import { isRecord } from "../shared/record.js";
 import { v } from "convex/values";
 import { classifyProviderError } from "../shared/retry.js";
 import { zohoCpaasError } from "../shared/errors.js";
-import { validateUploadFile } from "../shared/provider.js";
+import { readBoundedText } from "../shared/bounds.js";
+import { maxProviderBodyBytes, validateUploadFile } from "../shared/provider.js";
 import { action } from "./_generated/server.js";
 import { providerConfiguration, readTestMode, tokenFor } from "./config.js";
 
@@ -34,14 +35,19 @@ export const upload = action({
             Accept: "application/json",
           },
           body: args.content,
+          redirect: "manual",
           signal: controller.signal,
         });
       } catch {
         console.warn("ZOHO_CPAAS_NETWORK_ERROR");
         throw zohoCpaasError("ZOHO_CPAAS_NETWORK_ERROR", { retryable: true });
       }
+      if (response.status >= 300 && response.status < 400) {
+        await response.body?.cancel();
+        throw zohoCpaasError("ZOHO_CPAAS_INVALID_RESPONSE");
+      }
       try {
-        raw = await response.text();
+        raw = await readBoundedText(response, maxProviderBodyBytes);
       } catch {
         raw = undefined;
       }
@@ -50,7 +56,7 @@ export const upload = action({
     }
     let parsed: unknown;
     try {
-      parsed = raw !== undefined && raw.length <= 65536 ? JSON.parse(raw) : null;
+      parsed = raw === undefined ? null : JSON.parse(raw);
     } catch {
       parsed = null;
     }

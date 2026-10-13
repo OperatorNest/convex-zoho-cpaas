@@ -79,3 +79,22 @@ test.each(["email", "whatsapp"])(
     expect(await send()).toEqual(ids);
   },
 );
+
+test("a test-mode suppression does not block a live send", async () => {
+  vi.useFakeTimers();
+  vi.stubEnv("ZOHO_CPAAS_EMAIL_TOKEN", "dummy-token");
+  const t = createComponentTest();
+  await t.run((ctx) =>
+    ctx.db.insert("suppressions", {
+      testMode: true,
+      channel: "email",
+      address: "recipient@example.test",
+      reason: "hardbounce",
+      createdAt: 1,
+    }),
+  );
+  await expectZohoCpaasError(t.mutation(api.email.send, emailRequest), "ZOHO_CPAAS_ALL_SUPPRESSED");
+  const [id] = await t.mutation(api.email.send, { ...emailRequest, testMode: false });
+  const message = await t.run((ctx) => ctx.db.get("messages", id!));
+  expect(message?.status).toBe("queued");
+});

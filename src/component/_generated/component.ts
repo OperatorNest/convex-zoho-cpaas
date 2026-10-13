@@ -469,6 +469,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             maximumRowsRead?: number;
             numItems: number;
           };
+          testMode?: boolean;
         },
         {
           continueCursor: string;
@@ -491,7 +492,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       remove: FunctionReference<
         "mutation",
         "internal",
-        { address: string; channel: "email" | "sms" | "whatsapp" },
+        {
+          address: string;
+          channel: "email" | "sms" | "whatsapp";
+          testMode?: boolean;
+        },
         boolean,
         Name
       >;

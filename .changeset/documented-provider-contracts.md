@@ -10,6 +10,15 @@
 - Breaking: send `files.upload` content as the raw request body with `Content-Type` set to `mimeType` and the file name in the `name` query, and reject malformed MIME types.
 - Breaking: correlate batch email events by request ID plus recipient, give every batch row the same client reference, and stop sending an injected merge field and top-level batch `merge_info`.
 - Breaking: allow `failed` only from queued, sending, accepted or unknown, so a late failure cannot overwrite a WhatsApp delivery or read.
+- Breaking: accept idempotency keys of 1 to 128 characters from `A-Z`, `a-z`, `0-9`, `_` and `-`, and scope each key to test mode.
+- Breaking: scope suppressions to test mode; `suppressions.list` and `suppressions.remove` read the client's test mode, and a test-mode suppression no longer blocks a live send.
+- Breaking: remove the standalone `registerRoutes(http, component, options)`; register the route with `client.registerRoutes(http, { path? })`, which forwards the constructor's `onEvent`.
+- Breaking: the webhook route answers 400 for a body above 512 KiB or not well-formed UTF-8 and ignores a non-numeric `Content-Length`.
+- Breaking: reject `ZOHO_CPAAS_WEBHOOK_SECRET` and `ZOHO_CPAAS_WEBHOOK_SECRET_PREVIOUS` values with leading or trailing whitespace as `ZOHO_CPAAS_NOT_CONFIGURED` instead of trimming them.
+- Breaking: change the messages of `ZOHO_CPAAS_INVALID_ARGUMENT`, `ZOHO_CPAAS_INVALID_WEBHOOK_SIGNATURE` and `ZOHO_CPAAS_NETWORK_ERROR`.
+- Breaking: provider requests do not follow redirects; a 3xx response raises `ZOHO_CPAAS_INVALID_RESPONSE` for an upload and leaves a send unknown with that error.
+- Read provider response bodies up to 64 KiB.
+- Rename the retention cron to `cleanup`.
 - Read the webhook request ID from the event message before the payload.
 - Keep a live message's stored test mode when a reconciled event links to it while env test mode is on.
 - Mark an SMS or WhatsApp message left sending by an interrupted attempt as unknown instead of resending it.

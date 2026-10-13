@@ -153,7 +153,7 @@ test("invalid signatures return 401 while missing secrets return 500", async () 
   expect((await post(t, body, { signature: "broken" })).status).toBe(401);
 });
 
-test("content-length guard caps webhook reads with 413", async () => {
+test("content-length guard caps webhook reads with 400", async () => {
   const t = fresh();
   const body = "x".repeat(512 * 1024 + 1);
   const response = await t.fetch("/zoho-cpaas/webhook", {
@@ -164,7 +164,7 @@ test("content-length guard caps webhook reads with 413", async () => {
     },
     body,
   });
-  expect(response.status).toBe(413);
+  expect(response.status).toBe(400);
   const streamInit: RequestInit & { duplex: "half" } = {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -179,7 +179,7 @@ test("content-length guard caps webhook reads with 413", async () => {
     duplex: "half",
   };
   const streamResponse = await t.fetch("/zoho-cpaas/webhook", streamInit);
-  expect(streamResponse.status).toBe(413);
+  expect(streamResponse.status).toBe(400);
 });
 
 test("arrays are recorded as separate events and signed form and JSON decoding preserve plus", async () => {
@@ -465,7 +465,7 @@ test("an undated WhatsApp delivery is acknowledged without reaching callback con
   expect(await t.run(async (ctx) => ctx.db.query("webhookEvents").take(10))).toEqual([]);
 });
 
-test("route rejects invalid length, oversized bodies, undecodable bytes, and unsigned requests", async () => {
+test("route ignores a malformed length and rejects oversized bodies, undecodable bytes, and unsigned requests", async () => {
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
   const t = fresh();
   const body = payload("route-boundaries");
@@ -474,13 +474,13 @@ test("route rejects invalid length, oversized bodies, undecodable bytes, and uns
     headers: { "content-length": "not-a-number" },
     body,
   });
-  expect(invalidLength.status).toBe(400);
+  expect(invalidLength.status).toBe(401);
   const tooLarge = await t.fetch("/zoho-cpaas/webhook", {
     method: "POST",
     headers: { "content-length": String(512 * 1024 + 1) },
     body,
   });
-  expect(tooLarge.status).toBe(413);
+  expect(tooLarge.status).toBe(400);
   const undecodable = await t.fetch("/zoho-cpaas/webhook", {
     method: "POST",
     body: new Uint8Array([0xff, 0xfe]),

@@ -1,25 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
-import { runSmoke, step } from "./smoke-harness.mjs";
-
-const WAIT_TIMEOUT_MS = 60_000;
-const WAIT_INTERVAL_MS = 1_000;
-
-function assertThat(condition, detail) {
-  if (!condition) throw new Error(detail ?? "assertion failed");
-}
-
-async function waitFor(read, what) {
-  const deadline = Date.now() + WAIT_TIMEOUT_MS;
-  for (;;) {
-    const value = await read();
-    if (value) return value;
-    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
-    await sleep(WAIT_INTERVAL_MS);
-  }
-}
+import { assertSmoke, runSmoke, step, waitFor } from "./smoke-harness.mjs";
 
 function readSiteUrl(workspace) {
   const config = JSON.parse(
@@ -44,7 +26,7 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
     waitFor(async () => {
       const message = await readMessage(messageId);
       return message?.status === status ? message : null;
-    }, `${messageId} to reach ${status}`);
+    });
   const countCallbacks = () => runFunction("example:webhookCallbackCount");
   const listSuppressions = () =>
     runFunction("example:listSuppressions", { paginationOpts: { numItems: 50, cursor: null } });
@@ -81,7 +63,7 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
     } catch {
       return false;
     }
-  }, "component India and test-mode configuration to reload");
+  });
 
   await step("files.upload returns a simulated file-cache key", async () => {
     const fileCacheKey = await runFunction("example:upload", {
@@ -89,7 +71,7 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
       mimeType: "text/plain",
       content: { $bytes: "c21va2U=" },
     });
-    assertThat(
+    assertSmoke(
       typeof fileCacheKey === "string" && fileCacheKey.startsWith("test-file-"),
       String(fileCacheKey),
     );
@@ -106,10 +88,12 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
   await step("email.send reaches accepted", async () => {
     sent = await waitForStatus(sentId, "accepted");
   });
-  await step("email.send tagged testMode", () => assertThat(sent?.testMode === true));
+  await step("email.send tagged testMode", () =>
+    assertSmoke(sent?.testMode === true, "email.send tagged testMode"),
+  );
   await step("idempotent replay returns same ids", async () => {
     const replay = await runFunction("example:sendEmail", emailRequest);
-    assertThat(replay.length === 1 && replay[0] === sentId, JSON.stringify(replay));
+    assertSmoke(replay.length === 1 && replay[0] === sentId, JSON.stringify(replay));
   });
 
   const batchRequest = {
@@ -119,16 +103,22 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
   };
   const batchIds = await runFunction("example:sendTemplateBatch", batchRequest);
   await step("sendTemplateBatch returns 3 rows", () =>
-    assertThat(batchIds.length === 3 && new Set(batchIds).size === 3),
+    assertSmoke(
+      batchIds.length === 3 && new Set(batchIds).size === 3,
+      "sendTemplateBatch returns 3 rows",
+    ),
   );
   await step("batch idempotent replay returns same ids", async () => {
     const replay = await runFunction("example:sendTemplateBatch", batchRequest);
-    assertThat(replay.join() === batchIds.join());
+    assertSmoke(replay.join() === batchIds.join(), "batch idempotent replay returns same ids");
   });
   await step("batch rows reach accepted in test mode", async () => {
     const rows = [];
     for (const messageId of batchIds) rows.push(await waitForStatus(messageId, "accepted"));
-    assertThat(rows.length === 3 && rows.every((row) => row.testMode === true));
+    assertSmoke(
+      rows.length === 3 && rows.every((row) => row.testMode === true),
+      "batch rows reach accepted in test mode",
+    );
   });
 
   const createBounceBody = (webhookRequestId, extra = {}) =>
@@ -165,15 +155,15 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
   const bounceBody = createBounceBody(`${tag}-wh1`);
   await step("signed hard-bounce webhook returns 200", async () => {
     const status = await postWebhook(bounceBody, signBody(bounceBody, secret));
-    assertThat(status === 200, `status ${status}`);
+    assertSmoke(status === 200, `status ${status}`);
   });
   await step("message status becomes bounced", async () => {
     const message = await readMessage(sentId);
-    assertThat(message?.status === "bounced", message?.status);
+    assertSmoke(message?.status === "bounced", String(message?.status));
   });
   await step("bounced address added to suppressions", async () => {
     const suppressions = await listSuppressions();
-    assertThat(
+    assertSmoke(
       suppressions.some(
         (suppression) =>
           suppression.address === addressFor("bounce") && suppression.reason === "hardbounce",
@@ -182,30 +172,36 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
   });
   const callbacksAfter = await countCallbacks();
   await step("onEvent callback ran once", () =>
-    assertThat(callbacksAfter === callbacksBefore + 1, `${callbacksBefore} -> ${callbacksAfter}`),
+    assertSmoke(callbacksAfter === callbacksBefore + 1, `${callbacksBefore} -> ${callbacksAfter}`),
   );
   await step("replayed webhook returns 200", async () => {
     const status = await postWebhook(bounceBody, signBody(bounceBody, secret));
-    assertThat(status === 200, `status ${status}`);
+    assertSmoke(status === 200, `status ${status}`);
   });
   await step("replayed webhook does not rerun callback", async () =>
-    assertThat((await countCallbacks()) === callbacksAfter),
+    assertSmoke(
+      (await countCallbacks()) === callbacksAfter,
+      "replayed webhook does not rerun callback",
+    ),
   );
   await step("bad signature returns 401", async () => {
     const status = await postWebhook(bounceBody, signBody(bounceBody, `${secret}x`));
-    assertThat(status === 401, `status ${status}`);
+    assertSmoke(status === 401, `status ${status}`);
   });
   const receiptsBefore = (await readReceipts()).length;
   const unidentifiedBody = createBounceBody(undefined, { note: tag });
   await step("signed body without webhook_request_id returns 200", async () => {
     const status = await postWebhook(unidentifiedBody, signBody(unidentifiedBody, secret));
-    assertThat(status === 200, `status ${status}`);
+    assertSmoke(status === 200, `status ${status}`);
   });
   await step("failed receipt recorded", async () =>
-    assertThat((await readReceipts()).length === receiptsBefore + 1),
+    assertSmoke((await readReceipts()).length === receiptsBefore + 1, "failed receipt recorded"),
   );
   await step("failed receipt does not run callback", async () =>
-    assertThat((await countCallbacks()) === callbacksAfter),
+    assertSmoke(
+      (await countCallbacks()) === callbacksAfter,
+      "failed receipt does not run callback",
+    ),
   );
 
   const countStaleReceipts = async () =>
@@ -218,13 +214,19 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
   });
   await step("signed webhook without an event time returns 200", async () => {
     const status = await postWebhook(undatedBody, signBody(undatedBody, secret));
-    assertThat(status === 200, `status ${status}`);
+    assertSmoke(status === 200, `status ${status}`);
   });
   await step("webhook without an event time records one stale_event receipt", async () =>
-    assertThat((await countStaleReceipts()) === staleReceiptsBefore + 1),
+    assertSmoke(
+      (await countStaleReceipts()) === staleReceiptsBefore + 1,
+      "webhook without an event time records one stale_event receipt",
+    ),
   );
   await step("webhook without an event time does not run callback", async () =>
-    assertThat((await countCallbacks()) === callbacksAfter),
+    assertSmoke(
+      (await countCallbacks()) === callbacksAfter,
+      "webhook without an event time does not run callback",
+    ),
   );
 
   await step("send to suppressed address is rejected as ZOHO_CPAAS_ALL_SUPPRESSED", async () => {
@@ -236,7 +238,7 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
       () => "accepted",
       (error) => String(error instanceof Error ? error.message : error),
     );
-    assertThat(outcome.includes("ZOHO_CPAAS_ALL_SUPPRESSED"), outcome);
+    assertSmoke(outcome.includes("ZOHO_CPAAS_ALL_SUPPRESSED"), outcome);
   });
   await step("suppressed batch row is suppressed without a provider call", async () => {
     const messageIds = await runFunction("example:sendTemplateBatch", {
@@ -244,7 +246,7 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
       templateKey: "smoke-template",
     });
     const messages = await Promise.all(messageIds.map((messageId) => readMessage(messageId)));
-    assertThat(
+    assertSmoke(
       messages.some(
         (message) => message?.to === addressFor("bounce") && message.status === "suppressed",
       ),
@@ -262,18 +264,21 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
     });
   const firstPage = await listPage(pageRecipient, null);
   await step("list page 1 has 2 rows", () =>
-    assertThat(firstPage.page.length === 2 && firstPage.isDone === false),
+    assertSmoke(
+      firstPage.page.length === 2 && firstPage.isDone === false,
+      "list page 1 has 2 rows",
+    ),
   );
   await step("list page 2 has the remaining row", async () => {
     const secondPage = await listPage(pageRecipient, firstPage.continueCursor);
-    assertThat(
+    assertSmoke(
       secondPage.page.length === 1 &&
         !firstPage.page.some((message) => message.messageId === secondPage.page[0].messageId),
     );
   });
   await step("list normalizes recipient before indexed lookup", async () => {
     const normalizedPage = await listPage(pageRecipient.toUpperCase(), null);
-    assertThat(
+    assertSmoke(
       normalizedPage.page.length === 2 &&
         normalizedPage.page.every(
           (message, index) => message.messageId === firstPage.page[index]?.messageId,
@@ -281,12 +286,12 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
     );
   });
   await step("removeSuppression removes the address", async () =>
-    assertThat(
+    assertSmoke(
       (await runFunction("example:removeSuppression", { address: addressFor("bounce") })) === true,
     ),
   );
   await step("suppression list no longer has the address", async () =>
-    assertThat(
+    assertSmoke(
       !(await listSuppressions()).some(
         (suppression) => suppression.address === addressFor("bounce"),
       ),
@@ -299,7 +304,10 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
       to: "+15550100002",
       templateKey: "smoke-template",
     });
-    assertThat((await waitForStatus(messageId, "accepted")).testMode === true);
+    assertSmoke(
+      (await waitForStatus(messageId, "accepted")).testMode === true,
+      "whatsapp.sendTemplate accepted",
+    );
   });
   await step("sms.sendTemplate accepted", async () => {
     const messageId = await runFunction("example:sendSmsTemplate", {
@@ -307,6 +315,9 @@ await runSmoke(async ({ workspace, runConvexCli, runFunction, setEnvironmentVari
       to: "+919876543210",
       templateKey: "smoke-template",
     });
-    assertThat((await waitForStatus(messageId, "accepted")).testMode === true);
+    assertSmoke(
+      (await waitForStatus(messageId, "accepted")).testMode === true,
+      "sms.sendTemplate accepted",
+    );
   });
 });

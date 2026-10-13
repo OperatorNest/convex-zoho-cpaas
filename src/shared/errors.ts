@@ -25,12 +25,12 @@ const ZOHO_CPAAS_ERROR_MESSAGES = {
   ZOHO_CPAAS_IDEMPOTENCY_CONFLICT: "The idempotency key identifies different request content.",
   ZOHO_CPAAS_ALL_SUPPRESSED: "All email recipients are suppressed.",
   ZOHO_CPAAS_NOT_FOUND: "The referenced row does not exist.",
-  ZOHO_CPAAS_INVALID_WEBHOOK_SIGNATURE: "The webhook signature is missing or invalid.",
-  ZOHO_CPAAS_INVALID_ARGUMENT: "An argument is invalid, missing or out of bounds.",
+  ZOHO_CPAAS_INVALID_WEBHOOK_SIGNATURE: "The webhook signature is missing or wrong.",
+  ZOHO_CPAAS_INVALID_ARGUMENT: "An argument is missing, malformed or out of bounds.",
   ZOHO_CPAAS_NOT_CONFIGURED: "A required component setting is missing or malformed.",
   ZOHO_CPAAS_UNSUPPORTED_REGION: "The channel is unavailable at the configured endpoint.",
   ZOHO_CPAAS_PROVIDER_ERROR: "The provider rejected the request.",
-  ZOHO_CPAAS_NETWORK_ERROR: "The provider request outcome is unknown.",
+  ZOHO_CPAAS_NETWORK_ERROR: "The request to Zoho CPaaS failed before a response arrived.",
   ZOHO_CPAAS_INVALID_RESPONSE: "The provider returned an unusable success response.",
 } as const satisfies Record<ZohoCpaasErrorCode, string>;
 // repository-codes:end
@@ -50,6 +50,7 @@ export type ZohoCpaasErrorCode = (typeof ZOHO_CPAAS_ERROR_CODES)[number];
 export type ZohoCpaasErrorData = {
   code: ZohoCpaasErrorCode;
   message: string;
+  /** `true` only when repeating the identical call cannot create a second provider effect: the call is a read, the call carries an idempotency key the component or provider deduplicates, or the provider definitively refused without effect. */
   retryable?: boolean;
   providerStatus?: number;
   providerCode?: string;

@@ -73,7 +73,7 @@ const safeReasons = new Set([
   "stale_event",
   "missing_secret",
   "oversized_body",
-  "undecodable_body",
+  "unreadable_body",
   "processing_failed",
 ]);
 const timeKeys = new Set(["occurred_at", "timestamp", "processed_time", "time", "modified_time"]);

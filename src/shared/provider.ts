@@ -7,6 +7,9 @@ import {
   emailRecipientValidator,
   inlineImageValidator,
 } from "./validators.js";
+
+export const maxProviderBodyBytes = 65536;
+
 /** A Zoho data-center region: `us`, `eu` or `in`. */
 export const regionValidator = v.union(
   v.literal("us"),
@@ -188,8 +191,8 @@ export function buildEmailPayload(
   to: EmailAddress[] | EmailRecipient[],
   clientReference: string,
 ): Record<string, unknown> {
-  boundedString(input.templateKey, 200);
-  boundedString(input.templateAlias, 100);
+  if (input.templateKey !== undefined) boundedString(input.templateKey, 200);
+  if (input.templateAlias !== undefined) boundedString(input.templateAlias, 100);
   const first = to[0];
   const batch = first !== undefined && isBatchRecipient(first);
   if (to.some((item) => isBatchRecipient(item) !== batch))
@@ -292,7 +295,7 @@ function assertJsonDepth(value: JsonValue, remaining: number): void {
 }
 
 function template(input: TemplateInput, clientReference: string) {
-  boundedString(input.templateKey, 200);
+  if (input.templateKey !== undefined) boundedString(input.templateKey, 200);
   if (Boolean(input.templateKey) === Boolean(input.templateAlias)) {
     throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
   }
@@ -333,7 +336,7 @@ export function buildWhatsappPayload(
   input: TemplateInput & { from: string; zohoAgentId?: string },
   clientReference: string,
 ) {
-  boundedString(input.zohoAgentId, 200);
+  if (input.zohoAgentId !== undefined) boundedString(input.zohoAgentId, 200);
   const from = `+${normalizePhone(input.from)}`;
   const to = `+${normalizePhone(input.to)}`;
   if (from.length > 20 || to.length > 20) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");

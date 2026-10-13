@@ -2,7 +2,8 @@ import { isRecord } from "../shared/record.js";
 import { v } from "convex/values";
 import { classifyNetworkError, classifyProviderError, retryBackoffMs } from "../shared/retry.js";
 import { isZohoCpaasError, zohoCpaasError, type ZohoCpaasErrorCode } from "../shared/errors.js";
-import { normalizeEmail } from "../shared/provider.js";
+import { readBoundedText } from "../shared/bounds.js";
+import { maxProviderBodyBytes, normalizeEmail } from "../shared/provider.js";
 import { canTransitionStatus } from "../shared/status.js";
 import { reconcileRequestEvents } from "./webhooks.js";
 import { internal } from "./_generated/api.js";
@@ -74,8 +75,8 @@ export const begin = internalMutation({
       }
       const suppression = await ctx.db
         .query("suppressions")
-        .withIndex("by_channel_and_address", (q) =>
-          q.eq("channel", row.channel).eq("address", row.to),
+        .withIndex("by_testMode_and_channel_and_address", (q) =>
+          q.eq("testMode", job.testMode).eq("channel", row.channel).eq("address", row.to),
         )
         .unique();
       if (suppression) {
@@ -235,14 +236,25 @@ export const execute = internalAction({
           Accept: "application/json",
         },
         body: JSON.stringify(payload),
+        redirect: "manual",
         signal: controller.signal,
-      };
+      } satisfies RequestInit;
       requestStarted = true;
       response = await fetch(`${baseUrl}${job.path}`, request);
-      const raw = await response.text();
+      if (response.status >= 300 && response.status < 400) {
+        await response.body?.cancel();
+        return {
+          kind: "failed",
+          explicitResponse: true,
+          failureDefinitive: false,
+          error: zohoCpaasError("ZOHO_CPAAS_INVALID_RESPONSE").data,
+          retryable: false,
+        };
+      }
+      const raw = await readBoundedText(response, maxProviderBodyBytes);
       let body: unknown;
       try {
-        body = raw.length <= 65536 ? JSON.parse(raw) : null;
+        body = raw === undefined ? null : JSON.parse(raw);
       } catch {
         body = null;
       }
@@ -438,7 +450,9 @@ export const complete = pool.defineOnComplete<
       if (row.channel === "sms" && outcome.kind === "failed" && outcome.suppressionReason) {
         const old = await ctx.db
           .query("suppressions")
-          .withIndex("by_channel_and_address", (q) => q.eq("channel", "sms").eq("address", row.to))
+          .withIndex("by_testMode_and_channel_and_address", (q) =>
+            q.eq("testMode", job.testMode).eq("channel", "sms").eq("address", row.to),
+          )
           .unique();
         if (!old)
           await ctx.db.insert("suppressions", {

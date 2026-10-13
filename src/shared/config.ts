@@ -1,6 +1,7 @@
 import { zohoCpaasError } from "./errors.js";
 import { isRegion, normalizeToken, regionBaseUrl, regionFromBaseUrl } from "./provider.js";
 
+// repository-config:begin
 /** Component env values the component reads; each stays an optional string until `readConfig` validates it. */
 export type ComponentEnv = {
   readonly ZOHO_CPAAS_REGION?: string;
@@ -15,7 +16,7 @@ export type ComponentEnv = {
   readonly ZOHO_CPAAS_TEST_MODE?: string;
 };
 
-/** Validates every component env value; throws `ZOHO_CPAAS_NOT_CONFIGURED` on any malformed value. */
+/** Validates every component env value and returns validated values only; never resolves test mode. Throws `ZOHO_CPAAS_NOT_CONFIGURED` on any malformed value. */
 export function readConfig(env: ComponentEnv) {
   if (env.ZOHO_CPAAS_REGION !== undefined && !isRegion(env.ZOHO_CPAAS_REGION))
     throw zohoCpaasError("ZOHO_CPAAS_NOT_CONFIGURED");
@@ -43,8 +44,6 @@ export function readConfig(env: ComponentEnv) {
     env.ZOHO_CPAAS_WHATSAPP_TOKEN,
   ];
   for (const token of tokens) if (token !== undefined) normalizeToken(token);
-  for (const secret of [env.ZOHO_CPAAS_WEBHOOK_SECRET, env.ZOHO_CPAAS_WEBHOOK_SECRET_PREVIOUS])
-    if (secret !== undefined && !secret.trim()) throw zohoCpaasError("ZOHO_CPAAS_NOT_CONFIGURED");
   const baseUrl = regionBaseUrl(env.ZOHO_CPAAS_REGION, env.ZOHO_CPAAS_BASE_URL);
   return {
     region: env.ZOHO_CPAAS_REGION ?? regionFromBaseUrl(baseUrl),
@@ -53,14 +52,22 @@ export function readConfig(env: ComponentEnv) {
     emailToken: env.ZOHO_CPAAS_EMAIL_TOKEN,
     smsToken: env.ZOHO_CPAAS_SMS_TOKEN,
     whatsappToken: env.ZOHO_CPAAS_WHATSAPP_TOKEN,
-    webhookSecret: env.ZOHO_CPAAS_WEBHOOK_SECRET,
-    webhookSecretPrevious: env.ZOHO_CPAAS_WEBHOOK_SECRET_PREVIOUS,
+    webhookSecret: readSecret(env.ZOHO_CPAAS_WEBHOOK_SECRET),
+    webhookSecretPrevious: readSecret(env.ZOHO_CPAAS_WEBHOOK_SECRET_PREVIOUS),
     retentionDays,
-    testMode: resolveTestMode(undefined, env),
   };
 }
+// repository-config:end
 
 // shared-block:begin
+/** Returns `undefined` for an unset value and `value` when it is non-empty, well-formed and equal to its trim; otherwise throws `ZOHO_CPAAS_NOT_CONFIGURED`. */
+export function readSecret(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (value === "" || !value.isWellFormed() || value.trim() !== value)
+    throw zohoCpaasError("ZOHO_CPAAS_NOT_CONFIGURED");
+  return value;
+}
+
 /** Returns true when the caller requests test mode or `ZOHO_CPAAS_TEST_MODE` is `"true"`; the request can enable test mode and cannot disable it. */
 export function resolveTestMode(requested: boolean | undefined, env: ComponentEnv): boolean {
   return requested === true || env.ZOHO_CPAAS_TEST_MODE === "true";

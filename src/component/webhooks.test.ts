@@ -2,7 +2,7 @@ import { register as registerWorkpool } from "@convex-dev/workpool/test";
 import { internal } from "./_generated/api.js";
 import { commit } from "./webhooks.js";
 import type { Doc } from "./_generated/dataModel.js";
-import { atOrThrow, drain } from "../test-helpers.js";
+import { atOrThrow, drain, expectZohoCpaasError } from "../test-helpers.js";
 
 import { convexTest } from "convex-test";
 import { afterEach, expect, test, vi } from "vitest";
@@ -737,4 +737,29 @@ test("a newly shared provider identifier invalidates a cached unique match", asy
   const events = await t.run((ctx) => ctx.db.query("events").take(2));
   expect(atOrThrow(events, 1)).toMatchObject({ ambiguous: true });
   expect(atOrThrow(events, 1).messageId).toBeUndefined();
+});
+
+test("a callback handle that is not a function handle rolls the event back", async () => {
+  vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
+  const t = convexTest(schema, modules);
+  const body = JSON.stringify({
+    webhook_request_id: "invalid-handle",
+    event_name: ["open"],
+    event_message: [
+      {
+        ...createEventTimeFields(Date.now()),
+        email_info: { to: [{ email_address: { address: "valid@example.test" } }] },
+      },
+    ],
+  });
+  await expectZohoCpaasError(
+    t.action(api.webhooks.receive, {
+      rawBody: body,
+      contentType: "application/json",
+      signature: await signWebhook(body),
+      callbackHandle: "not-a-handle",
+    }),
+    "ZOHO_CPAAS_INVALID_ARGUMENT",
+  );
+  expect(await t.run((ctx) => ctx.db.query("events").take(1))).toEqual([]);
 });

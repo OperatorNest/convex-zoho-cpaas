@@ -136,3 +136,16 @@ test("upload reports provider rejection and unusable cache keys", async () => {
   );
   await expectZohoCpaasError(t.action(api.files.upload, file), "ZOHO_CPAAS_INVALID_RESPONSE");
 });
+
+test("upload does not follow a redirect and reports it as an invalid response", async () => {
+  vi.stubEnv("ZOHO_CPAAS_TEST_MODE", "false");
+  vi.stubEnv("ZOHO_CPAAS_EMAIL_TOKEN", "dummy-token");
+  const t = convexTest(schema, modules);
+  const fetchMock = vi.fn(
+    async (_url: string, _init: RequestInit) =>
+      new Response(null, { status: 302, headers: { Location: "https://example.test/" } }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  await expectZohoCpaasError(t.action(api.files.upload, file), "ZOHO_CPAAS_INVALID_RESPONSE");
+  expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+});

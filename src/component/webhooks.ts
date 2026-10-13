@@ -21,6 +21,7 @@ import { readConfig } from "../shared/config.js";
 import { readTestMode } from "./config.js";
 import { sha256Hex } from "../shared/crypto.js";
 import { boundedPage } from "../shared/bounds.js";
+import { zohoCpaasError } from "../shared/errors.js";
 
 const eventValidator = normalizedWebhookEventValidator;
 
@@ -126,19 +127,26 @@ async function addSuppression(
   } catch {
     return;
   }
+  const testMode = message?.testMode ?? readTestMode(undefined);
   const old = await ctx.db
     .query("suppressions")
-    .withIndex("by_channel_and_address", (q) => q.eq("channel", "email").eq("address", address))
+    .withIndex("by_testMode_and_channel_and_address", (q) =>
+      q.eq("testMode", testMode).eq("channel", "email").eq("address", address),
+    )
     .unique();
   if (!old)
     await ctx.db.insert("suppressions", {
-      testMode: message?.testMode ?? readTestMode(undefined),
+      testMode,
       channel: "email",
       address,
       reason: event.type,
       ...(message ? { sourceMessageId: message._id } : {}),
       createdAt: Date.now(),
     });
+}
+
+function isMutationHandle(handle: string): handle is FunctionHandle<"mutation"> {
+  return handle.startsWith("function://");
 }
 
 type Match = { message: Doc<"messages"> | null; ambiguous: boolean };
@@ -324,9 +332,10 @@ export const commit = internalMutation({
             });
         }
       } else if (!ambiguous) await addSuppression(ctx, event);
-      if (args.callbackHandle) {
-        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Convex serializes function handles as strings
-        await ctx.runMutation(args.callbackHandle as FunctionHandle<"mutation">, {
+      if (args.callbackHandle !== undefined) {
+        if (!isMutationHandle(args.callbackHandle))
+          throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
+        await ctx.runMutation(args.callbackHandle, {
           event,
           ...(message ? { messageId: message._id } : {}),
           ambiguous,

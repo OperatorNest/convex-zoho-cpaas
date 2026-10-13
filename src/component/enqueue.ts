@@ -9,7 +9,7 @@ import {
   type EmailRecipient,
 } from "../shared/provider.js";
 import { zohoCpaasError } from "../shared/errors.js";
-import { boundedString } from "../shared/bounds.js";
+import { validateIdempotencyKey } from "../shared/bounds.js";
 import { sha256Hex } from "../shared/crypto.js";
 import { stableStringify } from "../shared/record.js";
 import {
@@ -39,10 +39,17 @@ function assertSendConfiguration(channel: Channel, testMode: boolean): void {
   providerConfiguration(channel);
 }
 
-async function suppressed(ctx: MutationCtx, channel: Channel, address: string): Promise<boolean> {
+async function suppressed(
+  ctx: MutationCtx,
+  testMode: boolean,
+  channel: Channel,
+  address: string,
+): Promise<boolean> {
   const row = await ctx.db
     .query("suppressions")
-    .withIndex("by_channel_and_address", (q) => q.eq("channel", channel).eq("address", address))
+    .withIndex("by_testMode_and_channel_and_address", (q) =>
+      q.eq("testMode", testMode).eq("channel", channel).eq("address", address),
+    )
     .unique();
   return !!row;
 }
@@ -50,14 +57,16 @@ async function suppressed(ctx: MutationCtx, channel: Channel, address: string): 
 async function existingIds(
   ctx: MutationCtx,
   key: string | undefined,
+  testMode: boolean,
   request: string,
 ): Promise<Id<"messages">[] | null> {
   if (key === undefined) return null;
-  boundedString(key, 200);
-  if (!key.trim()) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
+  validateIdempotencyKey(key);
   const job = await ctx.db
     .query("sendJobs")
-    .withIndex("by_idempotencyKey", (q) => q.eq("idempotencyKey", key))
+    .withIndex("by_testMode_and_idempotencyKey", (q) =>
+      q.eq("testMode", testMode).eq("idempotencyKey", key),
+    )
     .order("desc")
     .first();
   if (!job) return null;
@@ -94,7 +103,7 @@ export async function enqueueEmail(
 ): Promise<Id<"messages">[]> {
   const request = stableStringify({ path, args });
   const testMode = readTestMode(args.testMode);
-  const prior = await existingIds(ctx, args.idempotencyKey, request);
+  const prior = await existingIds(ctx, args.idempotencyKey, testMode, request);
   if (prior) return prior;
   assertSendConfiguration("email", testMode);
   const allTo: EmailRecipient[] = args.to.map((item) =>
@@ -124,7 +133,7 @@ export async function enqueueEmail(
     const address = normalizeEmail(item.emailAddress.address);
     if (seen.has(address)) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
     seen.add(address);
-    const isSuppressed = await suppressed(ctx, "email", address);
+    const isSuppressed = await suppressed(ctx, testMode, "email", address);
     recipients.push({ to: address, status: isSuppressed ? "suppressed" : "queued" });
     if (!isSuppressed)
       preparedTo.push({
@@ -140,7 +149,7 @@ export async function enqueueEmail(
       const address = normalizeEmail(item.address);
       if (seen.has(address)) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
       seen.add(address);
-      const isSuppressed = await suppressed(ctx, "email", address);
+      const isSuppressed = await suppressed(ctx, testMode, "email", address);
       recipients.push({ to: address, status: isSuppressed ? "suppressed" : "queued" });
       if (!isSuppressed) target.push({ ...item, address: item.address.trim() });
     }
@@ -204,7 +213,7 @@ export async function enqueueTemplate(
 ) {
   const testMode = readTestMode(args.testMode);
   const request = stableStringify({ channel, args });
-  const prior = await existingIds(ctx, args.idempotencyKey, request);
+  const prior = await existingIds(ctx, args.idempotencyKey, testMode, request);
   if (prior) {
     const first = prior[0];
     if (!first) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
@@ -212,7 +221,7 @@ export async function enqueueTemplate(
   }
   assertSendConfiguration(channel, testMode);
   const to = normalizeRecipient(channel, args.to);
-  const isSuppressed = await suppressed(ctx, channel, to);
+  const isSuppressed = await suppressed(ctx, testMode, channel, to);
   if ("senderKey" in args) buildSmsPayload(args, args.clientReference ?? "validation");
   else buildWhatsappPayload(args, args.clientReference ?? "validation");
   const now = Date.now();

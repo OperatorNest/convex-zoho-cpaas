@@ -2,51 +2,13 @@ import { createFunctionHandle } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { components, internal } from "./_generated/api.js";
 import { httpAction, internalMutation, internalQuery } from "./_generated/server.js";
+import { readBoundedText } from "../../src/shared/bounds.js";
 import schema from "./schema.js";
 
 const maxBodyBytes = 512 * 1024;
 const maxSignatureBytes = 4096;
 const maxSessionAttempts = 64;
 const captureTtlMs = 30 * 60 * 1000;
-
-async function boundedBody(request: Request): Promise<string | null | undefined> {
-  const declared = request.headers.get("content-length");
-  if (declared !== null) {
-    if (!/^\d+$/.test(declared)) return undefined;
-    if (Number(declared) > maxBodyBytes) return null;
-  }
-  if (!request.body) return "";
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    while (true) {
-      // oxlint-disable-next-line no-await-in-loop -- bound the stream before buffering more data
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > maxBodyBytes) {
-        // oxlint-disable-next-line no-await-in-loop -- stop an oversized body immediately
-        await reader.cancel();
-        return null;
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return undefined;
-  }
-}
 
 export const e2eWebhook = httpAction(async (ctx, request) => {
   const session = await ctx.runQuery(internal.e2eWebhook.activeSession, {});
@@ -58,13 +20,13 @@ export const e2eWebhook = httpAction(async (ctx, request) => {
   if (reservation === "quota")
     return new Response("End-to-end capture quota exceeded", { status: 429 });
   if (reservation === "inactive") return new Response("Not found", { status: 404 });
-  const body = await boundedBody(request);
+  const body = await readBoundedText(request, maxBodyBytes);
   const contentType = request.headers.get("content-type") ?? "";
   const header = request.headers.get("producer-signature") ?? undefined;
   const signature =
     header && new TextEncoder().encode(header).byteLength <= maxSignatureBytes ? header : undefined;
-  let reason = body === null ? "oversized_body" : body === undefined ? "undecodable_body" : "";
-  if (body !== null && body !== undefined) {
+  let reason = body === undefined ? "unreadable_body" : "";
+  if (body !== undefined) {
     try {
       const callbackHandle = await createFunctionHandle(internal.webhookEvents.record);
       const result = await ctx.runAction(components.zohoCpaas.webhooks.receive, {
@@ -89,8 +51,8 @@ export const e2eWebhook = httpAction(async (ctx, request) => {
     return new Response("Webhook processing failed", { status: 500 });
   if (reason === "oversized_body")
     return new Response("Webhook body exceeds limit", { status: 413 });
-  if (reason === "undecodable_body")
-    return new Response("Webhook body is undecodable", { status: 400 });
+  if (reason === "unreadable_body")
+    return new Response("Webhook body exceeds limit or is not UTF-8", { status: 400 });
   if (reason === "invalid_signature")
     return new Response("Invalid webhook signature", { status: 401 });
   return new Response(reason === "duplicate" ? "Duplicate" : "OK", { status: 200 });
@@ -229,12 +191,12 @@ export const clear = internalMutation({
   args: { sessionId: v.string(), ids: v.array(v.id("e2eWebhookAttempts")) },
   returns: v.null(),
   handler: async (ctx, args) => {
-    for (const id of args.ids) {
-      // oxlint-disable-next-line no-await-in-loop -- bounded sequential writes in one mutation
-      const row = await ctx.db.get("e2eWebhookAttempts", id);
-      // oxlint-disable-next-line no-await-in-loop -- bounded sequential writes in one mutation
-      if (row?.sessionId === args.sessionId) await ctx.db.delete("e2eWebhookAttempts", id);
-    }
+    await Promise.all(
+      args.ids.map(async (id) => {
+        const row = await ctx.db.get("e2eWebhookAttempts", id);
+        if (row?.sessionId === args.sessionId) await ctx.db.delete("e2eWebhookAttempts", id);
+      }),
+    );
     return null;
   },
 });

@@ -13,6 +13,7 @@ import type { Infer } from "convex/values";
 import type { ComponentApi } from "../component/_generated/component.js";
 import type { Doc } from "../component/_generated/dataModel.js";
 import type { EmailAddress } from "../shared/provider.js";
+import { readBoundedText } from "../shared/bounds.js";
 import { zohoCpaasError } from "../shared/errors.js";
 import type { Channel, MessageStatus } from "../shared/status.js";
 import type { NormalizedWebhookEvent } from "../shared/webhook.js";
@@ -279,7 +280,7 @@ export class ZohoCpaas {
   };
   /** Lists and removes suppressed recipients. */
   readonly suppressions = {
-    /** Read a bounded page of persistent suppressions for a channel. */
+    /** Read a bounded page of persistent suppressions for a channel in the client's test mode. */
     list: (
       ctx: QueryContext,
       args: {
@@ -289,21 +290,51 @@ export class ZohoCpaas {
     ) =>
       ctx.runQuery(this.component.suppressions.list, {
         channel: args.channel,
+        testMode: this.options.testMode,
         paginationOpts: pageArgs(args.paginationOpts),
       }),
-    /** Remove a persistent suppression for the normalized channel address. */
+    /** Remove a persistent suppression for the normalized channel address in the client's test mode. */
     remove: (ctx: MutationContext, args: { channel: Channel; address: string }) =>
       ctx.runMutation(this.component.suppressions.remove, {
         channel: args.channel,
+        testMode: this.options.testMode,
         address: args.address,
       }),
   };
 
   /** Register the signed Zoho webhook route with the client event callback. */
-  registerRoutes(http: HttpRouter, options: { path?: `/${string}` } = {}) {
-    registerRoutes(http, this.component, {
-      path: options.path,
-      onEvent: this.options.onEvent,
+  registerRoutes(http: HttpRouter, options: { path?: `/${string}` } = {}): void {
+    const { component } = this;
+    const { onEvent } = this.options;
+    http.route({
+      path: options.path ?? "/zoho-cpaas/webhook",
+      method: "POST",
+      handler: httpActionGeneric(async (ctx, request) => {
+        const rawBody = await readBoundedText(request, maxWebhookBodyBytes);
+        if (rawBody === undefined)
+          return new Response("Webhook body exceeds limit or is not UTF-8", { status: 400 });
+        const callbackHandle = onEvent ? await createFunctionHandle(onEvent) : undefined;
+        let response;
+        try {
+          response = await ctx.runAction(component.webhooks.receive, {
+            rawBody,
+            contentType: request.headers.get("content-type") ?? "",
+            signature: request.headers.get("producer-signature") ?? undefined,
+            callbackHandle,
+          });
+        } catch {
+          return new Response("Webhook processing failed", { status: 500 });
+        }
+        if (response.reason === "missing_secret")
+          return new Response("Webhook secret is not configured", { status: 500 });
+        if (response.reason === "oversized_body")
+          return new Response("Webhook body exceeds limit", { status: 413 });
+        if (response.reason === "invalid_signature")
+          return Response.json(zohoCpaasError("ZOHO_CPAAS_INVALID_WEBHOOK_SIGNATURE").data, {
+            status: 401,
+          });
+        return new Response(response.reason === "duplicate" ? "Duplicate" : "OK", { status: 200 });
+      }),
     });
   }
 }
@@ -320,90 +351,4 @@ export function resolveEmailFrom(
 
 function pageArgs(options: PaginationOptions): PaginationOptions {
   return { numItems: options.numItems, cursor: options.cursor, endCursor: options.endCursor };
-}
-
-/** Register a signed Zoho webhook route with an optional internal event callback. */
-export function registerRoutes(
-  http: HttpRouter,
-  component: ComponentApi,
-  options: {
-    path?: `/${string}`;
-    onEvent?: FunctionReference_future<"mutation", "internal", ZohoCpaasEventArgs, null>;
-  } = {},
-): void {
-  http.route({
-    path: options.path ?? "/zoho-cpaas/webhook",
-    method: "POST",
-    handler: httpActionGeneric(async (ctx, request) => {
-      const rawBody = await readBoundedBody(request, maxWebhookBodyBytes);
-      if (rawBody === null) return new Response("Webhook body exceeds limit", { status: 413 });
-      if (rawBody === undefined)
-        return new Response("Webhook body is undecodable", { status: 400 });
-      const callbackHandle = options.onEvent
-        ? await createFunctionHandle(options.onEvent)
-        : undefined;
-      let response;
-      try {
-        response = await ctx.runAction(component.webhooks.receive, {
-          rawBody,
-          contentType: request.headers.get("content-type") ?? "",
-          signature: request.headers.get("producer-signature") ?? undefined,
-          callbackHandle,
-        });
-      } catch {
-        return new Response("Webhook processing failed", { status: 500 });
-      }
-      if (response.reason === "missing_secret")
-        return new Response("Webhook secret is not configured", { status: 500 });
-      if (response.reason === "oversized_body")
-        return new Response("Webhook body exceeds limit", { status: 413 });
-      if (response.reason === "invalid_signature")
-        return Response.json(zohoCpaasError("ZOHO_CPAAS_INVALID_WEBHOOK_SIGNATURE").data, {
-          status: 401,
-        });
-      return new Response(response.reason === "duplicate" ? "Duplicate" : "OK", { status: 200 });
-    }),
-  });
-}
-
-async function readBoundedBody(
-  request: Request,
-  maxBytes: number,
-): Promise<string | null | undefined> {
-  const declared = request.headers.get("content-length");
-  if (declared !== null) {
-    if (!/^\d+$/.test(declared)) return undefined;
-    if (Number(declared) > maxBytes) return null;
-  }
-  if (!request.body) return "";
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    while (true) {
-      // oxlint-disable-next-line no-await-in-loop -- sequential reads enforce the byte limit
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > maxBytes) {
-        // oxlint-disable-next-line no-await-in-loop -- cancel the active reader before returning
-        await reader.cancel();
-        return null;
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  try {
-    return new TextDecoder("utf-8", { ignoreBOM: true, fatal: true }).decode(bytes);
-  } catch {
-    return undefined;
-  }
 }

@@ -191,7 +191,7 @@ test("an attempt excludes recipients suppressed after enqueue", async () => {
   if (!message?.jobId) throw new Error("Missing job");
   await t.run((ctx) =>
     ctx.db.insert("suppressions", {
-      testMode: false,
+      testMode: true,
       channel: "email",
       address: "a@example.test",
       reason: "complaint",
@@ -385,3 +385,27 @@ test.each(["sms", "whatsapp"] as const)(
     }
   },
 );
+
+test("a send does not follow a redirect and leaves the message unknown", async () => {
+  vi.useFakeTimers();
+  vi.stubEnv("ZOHO_CPAAS_WHATSAPP_TOKEN", "dummy-token");
+  const t = createComponentTest();
+  const fetchMock = vi.fn(
+    async (_url: string, _init: RequestInit) =>
+      new Response(null, { status: 307, headers: { Location: "https://example.test/" } }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  const id = await t.mutation(api.whatsapp.sendTemplate, {
+    from: "+15550100001",
+    to: "+15550100002",
+    templateKey: "template",
+  });
+  await drain(t);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+  expect(await t.query(api.messages.get, { messageId: id })).toMatchObject({
+    status: "unknown",
+    failureDefinitive: false,
+    error: { code: "ZOHO_CPAAS_INVALID_RESPONSE" },
+  });
+});

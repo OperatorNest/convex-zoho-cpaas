@@ -60,7 +60,7 @@ export default defineSchema({
     finishedAt: v.optional(v.number()),
   })
     .index("by_finishedAt", ["finishedAt"])
-    .index("by_idempotencyKey", ["idempotencyKey"]),
+    .index("by_testMode_and_idempotencyKey", ["testMode", "idempotencyKey"]),
   events: defineTable({
     messageId: v.optional(v.id("messages")),
     channel: eventChannelValidator,
@@ -96,5 +96,5 @@ export default defineSchema({
     reason: v.string(),
     sourceMessageId: v.optional(v.id("messages")),
     createdAt: v.number(),
-  }).index("by_channel_and_address", ["channel", "address"]),
+  }).index("by_testMode_and_channel_and_address", ["testMode", "channel", "address"]),
 });
