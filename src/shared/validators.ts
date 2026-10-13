@@ -1,11 +1,13 @@
 import { v } from "convex/values";
 
+/** A messaging channel: `email`, `sms` or `whatsapp`. */
 export const channelValidator = v.union(
   v.literal("email"),
   v.literal("sms"),
   v.literal("whatsapp"),
 );
 
+/** A stored message lifecycle status, defined in Concepts. */
 export const statusValidator = v.union(
   v.literal("queued"),
   v.literal("sending"),
@@ -20,6 +22,7 @@ export const statusValidator = v.union(
   v.literal("canceled"),
 );
 
+/** An email address with an optional display name. */
 export const emailAddressValidator = v.object({
   address: v.string(),
   name: v.optional(v.string()),
@@ -30,6 +33,7 @@ export const emailRecipientValidator = v.object({
   mergeInfo: v.optional(v.record(v.string(), v.string())),
 });
 
+/** An email attachment given as base64 `content` with `mimeType`, or as a Zoho `fileCacheKey`. */
 export const attachmentValidator = v.object({
   name: v.string(),
   mimeType: v.optional(v.string()),
@@ -37,6 +41,7 @@ export const attachmentValidator = v.object({
   fileCacheKey: v.optional(v.string()),
 });
 
+/** An inline email image referenced by content ID `cid`, given as base64 `content` with `mimeType`, or as a Zoho `fileCacheKey`. */
 export const inlineImageValidator = v.object({
   cid: v.string(),
   mimeType: v.optional(v.string()),
@@ -126,4 +131,11 @@ export const whatsappTemplateArgsValidator = v.object({
   clientReference: v.optional(v.string()),
   idempotencyKey: v.optional(v.string()),
   testMode: v.optional(v.boolean()),
+});
+
+/** Component configuration with secrets omitted: whether each channel has a credential, whether test mode is active, and the provider region. */
+export const configurationValidator = v.object({
+  configured: v.object({ email: v.boolean(), sms: v.boolean(), whatsapp: v.boolean() }),
+  testMode: v.boolean(),
+  region: v.string(),
 });

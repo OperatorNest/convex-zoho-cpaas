@@ -1,9 +1,9 @@
-import { v } from "convex/values";
 import { env, query } from "./_generated/server.js";
 import { zohoCpaasError } from "../shared/errors.js";
 import { isIndiaBaseUrl, normalizeToken } from "../shared/provider.js";
 import type { Channel } from "../shared/status.js";
 import { readConfig, resolveTestMode } from "../shared/config.js";
+import { configurationValidator } from "../shared/validators.js";
 
 export function readTestMode(requested: boolean | undefined): boolean {
   readConfig(env);
@@ -39,9 +39,13 @@ export function providerConfiguration(channel: Channel): {
 
 export const get = query({
   args: {},
-  returns: v.object({ configured: v.boolean(), testMode: v.boolean(), region: v.string() }),
+  returns: configurationValidator,
   handler: () => ({
-    configured: !!tokenFor("email"),
+    configured: {
+      email: tokenFor("email") !== undefined,
+      sms: tokenFor("sms") !== undefined,
+      whatsapp: tokenFor("whatsapp") !== undefined,
+    },
     testMode: readTestMode(undefined),
     region: readConfig(env).region,
   }),

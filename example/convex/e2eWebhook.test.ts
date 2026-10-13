@@ -37,10 +37,7 @@ test("e2e capture route is session gated and records signed delivery plus replay
   expect((await post()).status).toBe(200);
   expect((await post()).status).toBe(200);
   const attempts = await t.query(internal.e2eWebhook.pending, { sessionId });
-  expect(attempts.map((attempt) => [attempt.reason, attempt.duplicate])).toEqual([
-    ["accepted", false],
-    ["duplicate", true],
-  ]);
+  expect(attempts.map((attempt) => attempt.reason)).toEqual(["accepted", "duplicate"]);
   expect(attempts[0]?.rawBody).toBe(body);
   expect(attempts[0]?.signature).toBe(headers["producer-signature"]);
   const callbacks = await t.query(internal.example.e2eCallbacksFor, {

@@ -453,7 +453,7 @@ async function collectAttempts(
     const name = eventName(payload);
     if (attempt.reason === "accepted" && typeof eventId === "string") {
       originals.push({ attempt, eventId, name, observations: fixture.observations });
-    } else if (!attempt.duplicate) {
+    } else if (attempt.reason !== "duplicate") {
       check("real webhook signature and payload", false);
     }
   }
@@ -524,11 +524,7 @@ async function collectAttempts(
       });
       run("e2eWebhook:clear", { sessionId, ids: [duplicate._id] });
       const after = run("example:e2eCallbacksFor", { zohoEventId: eventId }).length;
-      replayPassed =
-        replay.status === 200 &&
-        duplicate.duplicate &&
-        before === after &&
-        receiptsFor(eventId).length === 1;
+      replayPassed = replay.status === 200 && before === after && receiptsFor(eventId).length === 1;
     } catch (error) {
       if (cancelRequested) throw error;
     }

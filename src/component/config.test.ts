@@ -42,12 +42,13 @@ test.each([
   },
 );
 
-test("get derives the region from a base URL override when no region is set", async () => {
+test("get reports credentials per channel and derives the region from a base URL override", async () => {
   vi.stubEnv("ZOHO_CPAAS_BASE_URL", "https://cpaas.zoho.in/v1.1");
   vi.stubEnv("ZOHO_CPAAS_EMAIL_TOKEN", "dummy-token");
+  vi.stubEnv("ZOHO_CPAAS_SMS_TOKEN", "dummy-token");
   const t = convexTest(schema, modules);
   expect(await t.query(api.config.get, {})).toEqual({
-    configured: true,
+    configured: { email: true, sms: true, whatsapp: false },
     testMode: false,
     region: "in",
   });
@@ -58,7 +59,7 @@ test("get prefers an explicit region over the base URL host", async () => {
   vi.stubEnv("ZOHO_CPAAS_REGION", "eu");
   const t = convexTest(schema, modules);
   expect(await t.query(api.config.get, {})).toEqual({
-    configured: false,
+    configured: { email: false, sms: false, whatsapp: false },
     testMode: false,
     region: "eu",
   });

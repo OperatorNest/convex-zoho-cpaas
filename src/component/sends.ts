@@ -266,7 +266,7 @@ export const execute = internalAction({
         Date.now(),
         job.channel,
       );
-      console.warn(classified.code ?? "ZOHO_CPAAS_PROVIDER_ERROR");
+      console.warn(classified.code);
       return {
         kind: "failed",
         explicitResponse: true,
@@ -296,7 +296,7 @@ export const execute = internalAction({
           warning: "ZOHO_CPAAS_INVALID_RESPONSE" satisfies ZohoCpaasErrorCode,
         };
       const classified = classifyNetworkError(job.channel);
-      console.warn(classified.code ?? "ZOHO_CPAAS_NETWORK_ERROR");
+      console.warn(classified.code);
       return {
         kind: "failed",
         failureDefinitive: false,

@@ -41,6 +41,7 @@ export {
   inlineImageValidator,
   statusValidator,
   channelValidator,
+  configurationValidator,
 } from "../shared/validators.js";
 export type { ZohoCpaasErrorCode, ZohoCpaasErrorData } from "../shared/errors.js";
 export type { NormalizedWebhookEvent, WebhookEventType } from "../shared/webhook.js";
@@ -235,7 +236,7 @@ export class ZohoCpaas {
 
   /** Reads the component configuration with secrets omitted. */
   readonly config = {
-    /** Read whether email credentials are configured, whether test mode is active, and the provider region. */
+    /** Read whether each channel has a credential, whether test mode is active, and the provider region. */
     get: async (ctx: QueryContext) => {
       const status = await ctx.runQuery(this.component.config.get, {});
       return { ...status, testMode: this.options.testMode === true || status.testMode };
@@ -360,7 +361,7 @@ export function registerRoutes(
         return Response.json(zohoCpaasError("ZOHO_CPAAS_INVALID_WEBHOOK_SIGNATURE").data, {
           status: 401,
         });
-      return new Response(response.duplicate ? "Duplicate" : "OK", { status: 200 });
+      return new Response(response.reason === "duplicate" ? "Duplicate" : "OK", { status: 200 });
     }),
   });
 }

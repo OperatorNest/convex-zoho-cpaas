@@ -47,7 +47,7 @@ test("app client reports configuration and no-token test mode", async () => {
   vi.stubEnv("ZOHO_CPAAS_TEST_MODE", "true");
   const t = fresh();
   expect(await t.query(internal.example.getConfig, {})).toEqual({
-    configured: false,
+    configured: { email: false, sms: false, whatsapp: false },
     testMode: true,
     region: "us",
   });

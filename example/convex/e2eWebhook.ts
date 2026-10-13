@@ -64,7 +64,6 @@ export const e2eWebhook = httpAction(async (ctx, request) => {
   const signature =
     header && new TextEncoder().encode(header).byteLength <= maxSignatureBytes ? header : undefined;
   let reason = body === null ? "oversized_body" : body === undefined ? "undecodable_body" : "";
-  let duplicate = false;
   if (body !== null && body !== undefined) {
     try {
       const callbackHandle = await createFunctionHandle(internal.webhookEvents.record);
@@ -75,7 +74,6 @@ export const e2eWebhook = httpAction(async (ctx, request) => {
         callbackHandle,
       });
       reason = result.reason;
-      duplicate = result.duplicate;
     } catch {
       reason = "processing_failed";
     }
@@ -86,7 +84,6 @@ export const e2eWebhook = httpAction(async (ctx, request) => {
     contentType,
     ...(signature ? { signature } : {}),
     reason,
-    duplicate,
   });
   if (reason === "processing_failed" || reason === "missing_secret")
     return new Response("Webhook processing failed", { status: 500 });
@@ -96,7 +93,7 @@ export const e2eWebhook = httpAction(async (ctx, request) => {
     return new Response("Webhook body is undecodable", { status: 400 });
   if (reason === "invalid_signature")
     return new Response("Invalid webhook signature", { status: 401 });
-  return new Response(duplicate ? "Duplicate" : "OK", { status: 200 });
+  return new Response(reason === "duplicate" ? "Duplicate" : "OK", { status: 200 });
 });
 
 export const begin = internalMutation({
@@ -204,7 +201,6 @@ export const capture = internalMutation({
     contentType: v.string(),
     signature: v.optional(v.string()),
     reason: v.string(),
-    duplicate: v.boolean(),
   },
   returns: v.null(),
   handler: async (ctx, args) => {

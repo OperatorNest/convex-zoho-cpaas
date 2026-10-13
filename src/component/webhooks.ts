@@ -390,7 +390,7 @@ export async function reconcileRequestEvents(
     await ctx.db.patch("events", stored._id, {
       messageId: message._id,
       ambiguous: false,
-      testMode: message.testMode || readTestMode(undefined),
+      testMode: message.testMode,
     });
     await applyEvent(ctx, event, message);
   }
@@ -418,7 +418,6 @@ export const receive = action({
     callbackHandle: v.optional(v.string()),
   },
   returns: v.object({
-    duplicate: v.boolean(),
     reason: v.union(
       v.literal("accepted"),
       v.literal("duplicate"),
@@ -433,7 +432,6 @@ export const receive = action({
     ctx,
     args,
   ): Promise<{
-    duplicate: boolean;
     reason:
       | "accepted"
       | "duplicate"
@@ -444,29 +442,25 @@ export const receive = action({
       | "stale_event";
   }> => {
     if (new TextEncoder().encode(args.rawBody).byteLength > maxWebhookBodyBytes)
-      return { duplicate: false, reason: "oversized_body" };
+      return { reason: "oversized_body" };
     const config = readConfig(env);
-    if (!config.webhookSecret && !config.webhookSecretPrevious)
-      return { duplicate: false, reason: "missing_secret" };
+    if (!config.webhookSecret && !config.webhookSecretPrevious) return { reason: "missing_secret" };
     if (!args.signature || new TextEncoder().encode(args.signature).byteLength > 4096)
-      return { duplicate: false, reason: "invalid_signature" };
+      return { reason: "invalid_signature" };
     const signed = await verifyWebhookSignature(
       args.rawBody,
       args.signature,
       config.webhookSecret,
       config.webhookSecretPrevious,
     );
-    if (signed === null) return { duplicate: false, reason: "invalid_signature" };
+    if (signed === null) return { reason: "invalid_signature" };
     const bodyHash = await sha256Hex(args.rawBody);
     const invalidPayload = async () => {
-      const result = await ctx.runMutation(internal.webhooks.recordFailure, {
+      await ctx.runMutation(internal.webhooks.recordFailure, {
         bodyHash,
         reason: "invalid_payload",
       });
-      return {
-        duplicate: result.duplicate,
-        reason: "invalid_payload" as const,
-      };
+      return { reason: "invalid_payload" as const };
     };
     if (
       !/^(application\/json|application\/x-www-form-urlencoded)(\s*;|\s*$)/i.test(args.contentType)
@@ -483,13 +477,13 @@ export const receive = action({
       event.occurredAt !== undefined &&
       event.occurredAt >= oldestEventAt &&
       event.occurredAt <= latestEventAt;
-    const events = parsed.events;
-    if (!events.every(isFresh)) {
-      const result = await ctx.runMutation(internal.webhooks.recordFailure, {
+    const events = parsed.events.filter(isFresh);
+    if (events.length === 0) {
+      await ctx.runMutation(internal.webhooks.recordFailure, {
         bodyHash,
         reason: "stale_event",
       });
-      return { duplicate: result.duplicate, reason: "stale_event" };
+      return { reason: "stale_event" };
     }
     if (
       events.length > 500 ||
@@ -502,7 +496,7 @@ export const receive = action({
       bodyHash,
       ...(args.callbackHandle ? { callbackHandle: args.callbackHandle } : {}),
     });
-    return { duplicate: result.duplicate, reason: result.duplicate ? "duplicate" : "accepted" };
+    return { reason: result.duplicate ? "duplicate" : "accepted" };
   },
 });
 
@@ -511,7 +505,7 @@ export const recordFailure = internalMutation({
     bodyHash: v.string(),
     reason: v.union(v.literal("invalid_payload"), v.literal("stale_event")),
   },
-  returns: v.object({ duplicate: v.boolean() }),
+  returns: v.null(),
   handler: async (ctx, args) => {
     const old = await ctx.db
       .query("webhookReceipts")
@@ -519,7 +513,7 @@ export const recordFailure = internalMutation({
         q.eq("bodyHash", args.bodyHash).eq("reason", args.reason),
       )
       .unique();
-    if (old) return { duplicate: false };
+    if (old) return null;
     await ctx.db.insert("webhookReceipts", {
       testMode: readTestMode(undefined),
       zohoEventId: `invalid:${args.bodyHash}`,
@@ -527,6 +521,6 @@ export const recordFailure = internalMutation({
       reason: args.reason,
       createdAt: Date.now(),
     });
-    return { duplicate: false };
+    return null;
   },
 });

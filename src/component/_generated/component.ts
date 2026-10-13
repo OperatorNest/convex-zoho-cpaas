@@ -28,7 +28,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "query",
         "internal",
         {},
-        { configured: boolean; region: string; testMode: boolean },
+        {
+          configured: { email: boolean; sms: boolean; whatsapp: boolean };
+          region: string;
+          testMode: boolean;
+        },
         Name
       >;
     };
@@ -503,7 +507,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           signature?: string;
         },
         {
-          duplicate: boolean;
           reason:
             | "accepted"
             | "duplicate"

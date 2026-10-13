@@ -60,13 +60,7 @@ export const upload = action({
         parsed,
         response.headers.get("Retry-After"),
       );
-      const zohoCode = classified.code;
-      console.warn(zohoCode);
-      throw zohoCpaasError("ZOHO_CPAAS_PROVIDER_ERROR", {
-        retryable: classified.retryable,
-        providerStatus: response.status,
-        providerCode: classified.providerCode,
-      });
+      throw zohoCpaasError(classified.code, classified);
     }
     if (!parsed) throw zohoCpaasError("ZOHO_CPAAS_INVALID_RESPONSE");
     const value = isRecord(parsed) ? parsed : {};

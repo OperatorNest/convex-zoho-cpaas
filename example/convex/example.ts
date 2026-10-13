@@ -1,4 +1,9 @@
-import { ZohoCpaas, channelValidator, statusValidator } from "@operatornest/convex-zoho-cpaas";
+import {
+  ZohoCpaas,
+  channelValidator,
+  configurationValidator,
+  statusValidator,
+} from "@operatornest/convex-zoho-cpaas";
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { components } from "./_generated/api.js";
@@ -10,7 +15,7 @@ const zohoCpaas = new ZohoCpaas(components.zohoCpaas, {
 
 export const getConfig = internalQuery({
   args: {},
-  returns: v.object({ configured: v.boolean(), testMode: v.boolean(), region: v.string() }),
+  returns: configurationValidator,
   handler: (ctx) => zohoCpaas.config.get(ctx),
 });
 
@@ -43,25 +48,20 @@ export const sendTemplate = internalMutation({
 
 export const get = internalQuery({
   args: { messageId: v.string() },
-  returns: v.union(
-    v.object({
-      to: v.string(),
-      status: statusValidator,
-      zohoRequestId: v.optional(v.string()),
-      testMode: v.optional(v.boolean()),
-    }),
-    v.null(),
-  ),
+  returns: v.object({
+    to: v.string(),
+    status: statusValidator,
+    zohoRequestId: v.optional(v.string()),
+    testMode: v.boolean(),
+  }),
   handler: async (ctx, args) => {
     const message = await zohoCpaas.messages.get(ctx, { messageId: args.messageId });
-    return message
-      ? {
-          to: message.to,
-          status: message.status,
-          ...(message.zohoRequestId ? { zohoRequestId: message.zohoRequestId } : {}),
-          ...(message.testMode === undefined ? {} : { testMode: message.testMode }),
-        }
-      : null;
+    return {
+      to: message.to,
+      status: message.status,
+      zohoRequestId: message.zohoRequestId,
+      testMode: message.testMode,
+    };
   },
 });
 

@@ -123,6 +123,7 @@ export const webhookEventTypeValidator = v.union(
 );
 /** A Zoho event category used to update or observe an outbound message. */
 export type WebhookEventType = Infer<typeof webhookEventTypeValidator>;
+/** A signed webhook event normalized from a Zoho payload, as passed to the `onEvent` callback. */
 export const normalizedWebhookEventValidator = v.object({
   zohoEventId: v.string(),
   type: webhookEventTypeValidator,
@@ -199,12 +200,13 @@ function first(value: unknown): JSONObject | null {
 }
 
 // Epoch numbers below 1e12 are seconds: read as milliseconds they would predate September 2001.
+const ZONED_ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})$/;
 const SECONDS_EPOCH_LIMIT = 1e12;
 
 function epochMs(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value) && value > 0)
     return value < SECONDS_EPOCH_LIMIT ? value * 1000 : value;
-  if (typeof value !== "string") return undefined;
+  if (typeof value !== "string" || !ZONED_ISO_TIME.test(value)) return undefined;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }

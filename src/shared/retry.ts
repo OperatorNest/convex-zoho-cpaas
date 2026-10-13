@@ -1,5 +1,5 @@
 import { isRecord } from "./record.js";
-import { zohoCpaasError, type ZohoCpaasErrorCode } from "./errors.js";
+import { zohoCpaasError } from "./errors.js";
 import type { Channel } from "./status.js";
 
 export const zohoCpaasProviderErrorCodes = [
@@ -31,7 +31,7 @@ export type ClassifiedError = {
   retryable: boolean;
   accountState: boolean;
   explicitZohoCode?: boolean;
-  code: ZohoCpaasErrorCode;
+  code: "ZOHO_CPAAS_PROVIDER_ERROR" | "ZOHO_CPAAS_NETWORK_ERROR";
   providerCode?: string;
   providerStatus?: number;
   subCode?: string;
@@ -143,6 +143,7 @@ export function classifyProviderError(
       providerStatus: httpStatus,
       providerCode: primaryCode ?? subCode,
     }).data,
+    code: "ZOHO_CPAAS_PROVIDER_ERROR",
     retryable,
     accountState,
     explicitZohoCode,
@@ -159,6 +160,7 @@ export function classifyNetworkError(channel: Channel): ClassifiedError {
   const retryable = channel === "email";
   return {
     ...zohoCpaasError("ZOHO_CPAAS_NETWORK_ERROR", { retryable }).data,
+    code: "ZOHO_CPAAS_NETWORK_ERROR",
     retryable,
     accountState: false,
   };

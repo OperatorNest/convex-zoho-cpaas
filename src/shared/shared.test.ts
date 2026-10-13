@@ -23,6 +23,9 @@ import {
 import { canTransitionStatus } from "./status.js";
 import { parseWebhookBody, verifyWebhookSignature } from "./webhook.js";
 
+const eventTimeOf = (time: string) =>
+  parseEventTime({ email_info: {}, event_data: [{ details: [{ time }] }] });
+
 // Documented: the field nesting follows the published email webhook payload; no field is captured from a live delivery.
 const webhookPayload = {
   event_name: ["hardbounce"],
@@ -118,6 +121,16 @@ describe("webhook trust boundary", () => {
       { details: [{ time }] },
     ])
       expect(parseEventTime({ email_info: {}, event_data: eventData })).toBe(Date.parse(time));
+  });
+
+  test("reads ISO 8601 times only with a Z or numeric offset designator", () => {
+    expect(eventTimeOf("2026-10-04T15:30:05.123+05:30")).toBe(
+      Date.parse("2026-10-04T10:00:05.123Z"),
+    );
+    expect(eventTimeOf("2026-10-04T15:30:05+0530")).toBe(Date.parse("2026-10-04T10:00:05Z"));
+    expect(eventTimeOf("2026-10-04T10:00Z")).toBe(Date.parse("2026-10-04T10:00:00Z"));
+    for (const time of ["2026-10-04T10:00:05", "2026-10-04", "Sun, 04 Oct 2026 10:00:05 GMT"])
+      expect(eventTimeOf(time)).toBeUndefined();
   });
 
   test("reads epoch numbers below 1e12 as seconds and larger numbers as milliseconds", () => {

@@ -21,7 +21,6 @@ export default defineSchema({
     contentType: v.string(),
     signature: v.optional(v.string()),
     reason: v.string(),
-    duplicate: v.boolean(),
     receivedAt: v.number(),
   }).index("by_sessionId_and_receivedAt", ["sessionId", "receivedAt"]),
   e2eWebhookSession: defineTable({

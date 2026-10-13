@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import { truncateText } from "./bounds.js";
 
 // repository-codes:begin
+/** Every error code the component raises or stores, each with one fixed message. */
 export const ZOHO_CPAAS_ERROR_CODES = [
   "ZOHO_CPAAS_IDEMPOTENCY_CONFLICT",
   "ZOHO_CPAAS_ALL_SUPPRESSED",

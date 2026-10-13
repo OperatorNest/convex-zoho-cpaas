@@ -79,6 +79,45 @@ test("events received before send completion reconcile by recipient, client refe
   }
 });
 
+test("reconciliation keeps a live message's test mode when env test mode is on", async () => {
+  vi.stubEnv("ZOHO_CPAAS_TEST_MODE", "true");
+  const t = convexTest(schema, modules);
+  const linked = await t.run(async (ctx) => {
+    const messageId = await ctx.db.insert("messages", {
+      testMode: false,
+      channel: "email",
+      to: "live@example.test",
+      from: "sender@example.test",
+      status: "accepted",
+      clientReference: "ref-live",
+      zohoRequestId: "request-live",
+      attempts: 1,
+      region: "us",
+      createdAt: 1,
+    });
+    const eventId = await ctx.db.insert("events", {
+      testMode: true,
+      channel: "email",
+      type: "hardbounce",
+      occurredAt: 2,
+      receivedAt: 2,
+      zohoEventId: "event-live",
+      zohoRequestId: "request-live",
+      recipient: "live@example.test",
+      raw: JSON.stringify({ event_message: { email_info: {} } }),
+    });
+    await reconcileRequestEvents(ctx, "request-live", [messageId]);
+    return { eventId, messageId };
+  });
+  expect(await t.run((ctx) => ctx.db.get("events", linked.eventId))).toMatchObject({
+    messageId: linked.messageId,
+    testMode: false,
+  });
+  expect(await t.run((ctx) => ctx.db.query("suppressions").take(2))).toMatchObject([
+    { address: "live@example.test", testMode: false },
+  ]);
+});
+
 test("reconciliation leaves ambiguous, malformed-recipient and already linked events unresolved", async () => {
   const t = convexTest(schema, modules);
   const fixtures = await t.run(async (ctx) => {
@@ -169,14 +208,14 @@ test("receive verifies signatures and only committed bodies deduplicate", async 
       contentType: "application/json",
       signature,
     }),
-  ).toMatchObject({ reason: "invalid_payload", duplicate: false });
+  ).toMatchObject({ reason: "invalid_payload" });
   expect(
     await t.action(api.webhooks.receive, {
       rawBody: body,
       contentType: "application/json",
       signature,
     }),
-  ).toMatchObject({ reason: "invalid_payload", duplicate: false });
+  ).toMatchObject({ reason: "invalid_payload" });
   const wrongContent = JSON.stringify({
     webhook_request_id: "wrong-content",
     event_name: ["open"],
@@ -205,14 +244,14 @@ test("receive verifies signatures and only committed bodies deduplicate", async 
       contentType: "application/json",
       signature: await signWebhook(valid),
     }),
-  ).toMatchObject({ reason: "accepted", duplicate: false });
+  ).toMatchObject({ reason: "accepted" });
   expect(
     await t.action(api.webhooks.receive, {
       rawBody: valid,
       contentType: "application/json",
       signature: await signWebhook(valid),
     }),
-  ).toMatchObject({ reason: "duplicate", duplicate: true });
+  ).toMatchObject({ reason: "duplicate" });
   expect(
     await t.action(api.webhooks.receive, {
       rawBody: "x".repeat(512 * 1024 + 1),
@@ -407,7 +446,6 @@ test("an expired receipt cannot be replayed by replacing the unsigned timestamp"
   expect(await t.run((ctx) => ctx.db.query("webhookReceipts").take(1))).toEqual([]);
   expect(await receive(signature.replace(/^ts=\d+/, `ts=${Date.now()}`))).toEqual({
     reason: "stale_event",
-    duplicate: false,
   });
   expect(await t.run((ctx) => ctx.db.query("webhookReceipts").take(2))).toMatchObject([
     { reason: "stale_event" },
@@ -426,14 +464,14 @@ test("an invalid content type cannot block a valid delivery of the same signed b
   const signature = await signWebhook(rawBody);
   expect(
     await t.action(api.webhooks.receive, { rawBody, signature, contentType: "text/plain" }),
-  ).toEqual({ reason: "invalid_payload", duplicate: false });
+  ).toEqual({ reason: "invalid_payload" });
   expect(
     await t.action(api.webhooks.receive, { rawBody, signature, contentType: "application/json" }),
-  ).toEqual({ reason: "accepted", duplicate: false });
+  ).toEqual({ reason: "accepted" });
   expect(await t.run((ctx) => ctx.db.query("events").take(2))).toHaveLength(1);
   expect(
     await t.action(api.webhooks.receive, { rawBody, signature, contentType: "application/json" }),
-  ).toEqual({ reason: "duplicate", duplicate: true });
+  ).toEqual({ reason: "duplicate" });
 });
 
 test.each(["1", "60"])(
@@ -447,7 +485,8 @@ test.each(["1", "60"])(
     const cutoff = Date.now() - (retention === "60" ? 59 : 29) * 86_400_000;
     for (const [suffix, times, reason] of [
       ["boundary", [cutoff], "accepted"],
-      ["mixed", [Date.now(), cutoff - 1], "stale_event"],
+      ["mixed", [Date.now(), cutoff - 1], "accepted"],
+      ["expired", [cutoff - 1], "stale_event"],
     ] as const) {
       const rawBody = JSON.stringify({
         webhook_request_id: suffix,
@@ -462,14 +501,14 @@ test.each(["1", "60"])(
           contentType: "application/json",
           signature: await signWebhook(rawBody),
         }),
-      ).toEqual({ reason, duplicate: false });
+      ).toEqual({ reason });
     }
     expect(
-      (await t.run((ctx) => ctx.db.query("webhookReceipts").take(3))).map(
+      (await t.run((ctx) => ctx.db.query("webhookReceipts").take(4))).map(
         (receipt) => receipt.reason,
       ),
-    ).toEqual([undefined, "stale_event"]);
-    expect(await t.run((ctx) => ctx.db.query("events").take(2))).toHaveLength(1);
+    ).toEqual([undefined, undefined, "stale_event"]);
+    expect(await t.run((ctx) => ctx.db.query("events").take(3))).toHaveLength(2);
   },
 );
 
@@ -487,7 +526,7 @@ test("a signed event without a body timestamp is rejected as stale with one fail
       contentType: "application/json",
       signature: await signWebhook(rawBody),
     }),
-  ).toEqual({ reason: "stale_event", duplicate: false });
+  ).toEqual({ reason: "stale_event" });
   expect(await t.run((ctx) => ctx.db.query("webhookReceipts").take(2))).toMatchObject([
     { reason: "stale_event" },
   ]);
@@ -507,15 +546,53 @@ test("a future signed event is rejected as stale with one failed receipt", async
       contentType: "application/json",
       signature: await signWebhook(rawBody),
     }),
-  ).toEqual({ reason: "stale_event", duplicate: false });
+  ).toEqual({ reason: "stale_event" });
   expect(await t.run((ctx) => ctx.db.query("webhookReceipts").take(2))).toMatchObject([
     { reason: "stale_event" },
   ]);
 });
 
+test("a signed body applies its fresh bounce and skips its untimed event", async () => {
+  vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
+  const t = createComponentTest();
+  const rawBody = JSON.stringify({
+    webhook_request_id: "mixed-time",
+    event_name: ["hardbounce"],
+    event_message: [
+      {
+        ...createEventTimeFields(Date.now()),
+        email_info: { to: [{ email_address: { address: "fresh@example.test" } }] },
+      },
+      { email_info: { to: [{ email_address: { address: "untimed@example.test" } }] } },
+    ],
+  });
+  expect(
+    await t.action(api.webhooks.receive, {
+      rawBody,
+      contentType: "application/json",
+      signature: await signWebhook(rawBody),
+    }),
+  ).toEqual({ reason: "accepted" });
+  expect(
+    (await t.run((ctx) => ctx.db.query("suppressions").take(3))).map((row) => row.address),
+  ).toEqual(["fresh@example.test"]);
+  expect(await t.run((ctx) => ctx.db.query("events").take(3))).toHaveLength(1);
+});
+
 test("a WhatsApp body without a documented event time is rejected as stale once per body", async () => {
   vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
   const t = createComponentTest();
+  const messageId = await t.run((ctx) =>
+    ctx.db.insert(
+      "messages",
+      storedMessage({
+        channel: "whatsapp",
+        to: "+919876543210",
+        status: "unknown",
+        zohoMessageId: "wa-1",
+      }),
+    ),
+  );
   const rawBody = JSON.stringify({
     webhook_request_id: "whatsapp-undated",
     event_name: ["delivered"],
@@ -527,12 +604,15 @@ test("a WhatsApp body without a documented event time is rejected as stale once 
       contentType: "application/json",
       signature: await signWebhook(rawBody),
     });
-  expect(await receive()).toEqual({ reason: "stale_event", duplicate: false });
-  expect(await receive()).toEqual({ reason: "stale_event", duplicate: false });
+  expect(await receive()).toEqual({ reason: "stale_event" });
+  expect(await receive()).toEqual({ reason: "stale_event" });
   expect(await t.run((ctx) => ctx.db.query("webhookReceipts").take(3))).toMatchObject([
     { reason: "stale_event" },
   ]);
   expect(await t.run((ctx) => ctx.db.query("events").take(1))).toEqual([]);
+  expect(await t.run((ctx) => ctx.db.get("messages", messageId))).toMatchObject({
+    status: "unknown",
+  });
 });
 
 test("a late WhatsApp undelivered event cannot overwrite delivered, and read cannot regress", async () => {

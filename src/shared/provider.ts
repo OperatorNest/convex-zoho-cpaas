@@ -7,6 +7,7 @@ import {
   emailRecipientValidator,
   inlineImageValidator,
 } from "./validators.js";
+/** A Zoho data-center region: `us`, `eu` or `in`. */
 export const regionValidator = v.union(
   v.literal("us"),
   v.literal("eu"),
