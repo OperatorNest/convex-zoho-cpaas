@@ -601,15 +601,15 @@ describe("errors and message status", () => {
     ).toMatchObject({ retryable: false, accountState: true });
   });
 
-  test("retries 429, 5xx and daily limits with bounded Retry-After", () => {
+  test("retries only transient 429 refusals with bounded Retry-After", () => {
     expect(classifyProviderError(429, {}, "5")).toMatchObject({
       retryable: true,
       retryAfterMs: 5000,
     });
-    expect(classifyProviderError(503, {}, null).retryable).toBe(true);
+    expect(classifyProviderError(503, {}, null).retryable).toBe(false);
     expect(
       classifyProviderError(403, { error: { details: [{ code: "SMI_115" }] } }).retryAfterMs,
-    ).toBe(86400000);
+    ).toBeUndefined();
     expect(classifyProviderError(500, {}, null, Date.now(), "sms").retryable).toBe(false);
     expect(classifyProviderError(503, {}, null, Date.now(), "sms").retryable).toBe(false);
     expect(
@@ -634,7 +634,7 @@ describe("errors and message status", () => {
     expect(parseRetryAfter("999999999999999999999999999999999")).toBeUndefined();
     expect(
       classifyProviderError(
-        403,
+        429,
         { error: { code: "TM_3601", details: [{ code: "SERR_120" }, { code: "SMI_115" }] } },
         "5",
       ),
@@ -677,10 +677,8 @@ describe("errors and message status", () => {
     expect(retryBackoffMs(5)).toBe(16000);
   });
 
-  test("never retries SMS or WhatsApp network failures", () => {
-    expect(classifyNetworkError("sms").retryable).toBe(false);
-    expect(classifyNetworkError("whatsapp").retryable).toBe(false);
-    expect(classifyNetworkError("email").retryable).toBe(true);
+  test("never retries a send network failure without provider deduplication", () => {
+    expect(classifyNetworkError().retryable).toBe(false);
   });
 
   test("allows monotonic states and terminal bounce, but no reversals", () => {

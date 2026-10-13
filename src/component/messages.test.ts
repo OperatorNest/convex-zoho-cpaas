@@ -185,7 +185,7 @@ test("endCursor cannot expand a message page beyond its server read bound", asyn
   expect(result.page.length).toBeLessThanOrEqual(2);
 });
 
-test("canceling an uncertain email stops its retry and permits a later bounce", async () => {
+test("canceling an uncertain in-progress email prevents resending and permits a later bounce", async () => {
   vi.useFakeTimers();
   const t = createComponentTest();
   const ids = await t.mutation(api.email.send, {
@@ -199,29 +199,14 @@ test("canceling an uncertain email stops its retry and permits a later bounce", 
   const job = await t.run((ctx) => ctx.db.get("sendJobs", jobId));
   if (!job?.workId) throw new Error("Missing work");
   await t.mutation(internal.sends.begin, { jobId, attempt: 1 });
-  await t.mutation(internal.sends.complete, {
-    workId: job.workId,
-    context: { jobId, attempt: 1 },
-    result: {
-      kind: "success",
-      returnValue: {
-        kind: "failed",
-        retryable: true,
-        failureDefinitive: false,
-        error: {
-          code: "ZOHO_CPAAS_NETWORK_ERROR",
-          message: "The send request outcome is unknown.",
-        },
-      },
-    },
-  });
+  await t.run((ctx) =>
+    ctx.db.patch("messages", id, { status: "unknown", failureDefinitive: false }),
+  );
   expect(await t.mutation(api.messages.cancel, { messageId: id })).toBe(true);
   expect(await t.query(api.messages.get, { messageId: id })).toMatchObject({
     status: "unknown",
   });
-  expect(await t.mutation(internal.sends.begin, { jobId, attempt: 2 })).toMatchObject({
-    active: ["b@example.test"],
-  });
+  expect(await t.mutation(internal.sends.begin, { jobId, attempt: 2 })).toBeNull();
   await t.mutation(internal.webhooks.commit, {
     zohoEventId: "canceled-bounce",
     bodyHash: "canceled-bounce-hash",
@@ -302,5 +287,44 @@ test.each(["get", "listEvents", "cancel"])(
               paginationOpts: { numItems: 10, cursor: null },
             });
     await expectZohoCpaasError(result, "ZOHO_CPAAS_NOT_FOUND");
+  },
+);
+
+test.each(["cursor", "endCursor"] as const)(
+  "list rejects %s with one value beyond either message index key",
+  async (field) => {
+    const t = createComponentTest();
+    const paginationOpts = {
+      numItems: 10,
+      cursor: null,
+      [field]: JSON.stringify([null, null, null, null, null]),
+    };
+    for (const filters of [
+      { status: "accepted" as const },
+      { recipient: "a@example.test", channel: "email" as const },
+    ])
+      await expectZohoCpaasError(
+        t.query(api.messages.list, { ...filters, paginationOpts }),
+        "ZOHO_CPAAS_INVALID_ARGUMENT",
+      );
+  },
+);
+
+test.each(["cursor", "endCursor"] as const)(
+  "listEvents rejects %s with one value beyond the event index key",
+  async (field) => {
+    const t = createComponentTest();
+    const messageId = await t.run((ctx) => ctx.db.insert("messages", storedMessage()));
+    await expectZohoCpaasError(
+      t.query(api.messages.listEvents, {
+        messageId,
+        paginationOpts: {
+          numItems: 10,
+          cursor: null,
+          [field]: JSON.stringify([null, null, null, null, null]),
+        },
+      }),
+      "ZOHO_CPAAS_INVALID_ARGUMENT",
+    );
   },
 );

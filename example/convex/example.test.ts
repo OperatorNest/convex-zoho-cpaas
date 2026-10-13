@@ -216,7 +216,7 @@ test("an odd 2xx response is accepted with a warning and is never retried", asyn
   });
 });
 
-test("email workpool retries are capped at five attempts and a definitive failure can replay", async () => {
+test("email 5xx uncertainty is not retried and a definitive failure can replay", async () => {
   vi.useFakeTimers();
   vi.stubEnv("ZOHO_CPAAS_TOKEN", "test-token");
   const fetchMock = vi.fn(
@@ -239,16 +239,16 @@ test("email workpool retries are capped at five attempts and a definitive failur
 
   fetchMock.mockImplementation(async () => new Response("failure", { status: 500 }));
   await drain(t);
-  expect(fetchMock).toHaveBeenCalledTimes(6);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(
     await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(second, 0) }),
   ).toMatchObject({
     status: "unknown",
-    attempts: 5,
+    attempts: 1,
   });
 });
 
-test("an ambiguous email attempt keeps its idempotency key after a later rejection", async () => {
+test("an ambiguous email attempt keeps its idempotency key without resending", async () => {
   vi.useFakeTimers();
   vi.stubEnv("ZOHO_CPAAS_TOKEN", "test-token");
   const fetchMock = vi
@@ -268,12 +268,12 @@ test("an ambiguous email attempt keeps its idempotency key after a later rejecti
   };
   const first = await t.mutation(components.zohoCpaas.email.send, args);
   await drain(t);
-  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(
     await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(first, 0) }),
-  ).toMatchObject({ status: "unknown", attempts: 2, failureDefinitive: false });
+  ).toMatchObject({ status: "unknown", attempts: 1, failureDefinitive: false });
   expect(await t.mutation(components.zohoCpaas.email.send, args)).toEqual(first);
-  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
 test("SMS permits a configured India host even when the region env is unset", async () => {
@@ -636,7 +636,7 @@ test("email retries 429 using Retry-After and stops after five attempts", async 
   });
 });
 
-test("WhatsApp network failure does not retry, while a known Zoho 503 rejection does", async () => {
+test("WhatsApp network and known Zoho 503 failures do not retry", async () => {
   vi.useFakeTimers();
   vi.stubEnv("ZOHO_CPAAS_WHATSAPP_TOKEN", "wa-token");
   const fetchMock = vi
@@ -685,11 +685,11 @@ test("WhatsApp network failure does not retry, while a known Zoho 503 rejection 
     templateKey: "template-1",
   });
   await drain(t);
-  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(await t.query(components.zohoCpaas.messages.get, { messageId: second })).toMatchObject({
-    status: "accepted",
-    attempts: 2,
-    zohoMessageId: "provider-wa-1",
+    status: "failed",
+    attempts: 1,
+    error: { retryable: false, providerStatus: 503 },
   });
 });
 
@@ -1154,7 +1154,7 @@ test("SMS timeout records unknown after one attempt", async () => {
   });
 });
 
-test("fetch abort timeouts retry email with a five-attempt cap but never retry SMS", async () => {
+test("fetch abort timeouts never retry email or SMS", async () => {
   vi.useFakeTimers();
   vi.stubEnv("ZOHO_CPAAS_TOKEN", "email-token");
   vi.stubEnv("ZOHO_CPAAS_REGION", "in");
@@ -1176,12 +1176,12 @@ test("fetch abort timeouts retry email with a five-attempt cap but never retry S
     idempotencyKey: "ambiguous-email-timeout",
   });
   await drain(t);
-  expect(fetchMock).toHaveBeenCalledTimes(5);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(
     await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(emailIds, 0) }),
   ).toMatchObject({
     status: "unknown",
-    attempts: 5,
+    attempts: 1,
   });
   expect(
     await t.mutation(internal.example.sendEmail, {
@@ -1191,7 +1191,7 @@ test("fetch abort timeouts retry email with a five-attempt cap but never retry S
       idempotencyKey: "ambiguous-email-timeout",
     }),
   ).toEqual(emailIds);
-  expect(fetchMock).toHaveBeenCalledTimes(5);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
 
   fetchMock.mockClear();
   const smsId = await t.mutation(components.zohoCpaas.sms.sendTemplate, {
@@ -1217,7 +1217,7 @@ test("fetch abort timeouts retry email with a five-attempt cap but never retry S
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
-test("canceling an uncertain retry stops future requests and preserves unknown", async () => {
+test("canceling a completed uncertain email returns false and preserves its claim", async () => {
   vi.useFakeTimers();
   vi.stubEnv("ZOHO_CPAAS_TOKEN", "test-token");
   const fetchMock = vi.fn(
@@ -1240,7 +1240,7 @@ test("canceling an uncertain retry stops future requests and preserves unknown",
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(
     await t.mutation(components.zohoCpaas.messages.cancel, { messageId: atOrThrow(ids, 0) }),
-  ).toBe(true);
+  ).toBe(false);
   vi.runAllTimers();
   await drain(t);
   expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -1260,7 +1260,7 @@ test("canceling an uncertain retry stops future requests and preserves unknown",
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
-test("account-state SMS errors and SMS_108 are terminal; email SMI_115 waits 24 hours", async () => {
+test("account-state SMS errors, SMS_108 and email 403 daily-limit errors are terminal", async () => {
   vi.useFakeTimers();
   vi.stubEnv("ZOHO_CPAAS_REGION", "in");
   vi.stubEnv("ZOHO_CPAAS_SMS_TOKEN", "sms-token");
@@ -1315,16 +1315,13 @@ test("account-state SMS errors and SMS_108 are terminal; email SMI_115 waits 24 
     textbody: "Body",
   });
   await drain(t);
-  expect(fetchMock).toHaveBeenCalledTimes(5);
-  const [beforeDailyRetry, afterDailyRetry] = timestamps.slice(-2);
-  if (beforeDailyRetry === undefined || afterDailyRetry === undefined)
-    throw new Error("Expected both daily-limit attempts");
-  expect(afterDailyRetry - beforeDailyRetry).toBeGreaterThanOrEqual(86_400_000);
+  expect(fetchMock).toHaveBeenCalledTimes(4);
   expect(
     await t.query(components.zohoCpaas.messages.get, { messageId: atOrThrow(emailIds, 0) }),
   ).toMatchObject({
-    status: "accepted",
-    attempts: 2,
+    status: "failed",
+    attempts: 1,
+    error: { retryable: false, providerStatus: 403 },
   });
 });
 

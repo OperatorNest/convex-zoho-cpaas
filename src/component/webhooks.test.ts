@@ -579,41 +579,51 @@ test("a signed body applies its fresh bounce and skips its untimed event", async
   expect(await t.run((ctx) => ctx.db.query("events").take(3))).toHaveLength(1);
 });
 
-test("a WhatsApp body without a documented event time is rejected as stale once per body", async () => {
-  vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
-  const t = createComponentTest();
-  const messageId = await t.run((ctx) =>
-    ctx.db.insert(
-      "messages",
-      storedMessage({
-        channel: "whatsapp",
-        to: "+919876543210",
-        status: "unknown",
-        zohoMessageId: "wa-1",
-      }),
-    ),
-  );
-  const rawBody = JSON.stringify({
-    webhook_request_id: "whatsapp-undated",
-    event_name: ["delivered"],
-    event_message: [{ channel: "whatsapp", to: "+919876543210", message_id: "wa-1" }],
-  });
-  const receive = async () =>
-    t.action(api.webhooks.receive, {
-      rawBody,
-      contentType: "application/json",
-      signature: await signWebhook(rawBody),
+test.each([false, true])(
+  "a signed WhatsApp body with email timestamp fields=%s is stale and changes no message",
+  async (dated) => {
+    vi.stubEnv("ZOHO_CPAAS_WEBHOOK_SECRET", "test-key");
+    const t = createComponentTest();
+    const messageId = await t.run((ctx) =>
+      ctx.db.insert(
+        "messages",
+        storedMessage({
+          channel: "whatsapp",
+          to: "+919876543210",
+          status: "unknown",
+          zohoMessageId: "wa-1",
+        }),
+      ),
+    );
+    const rawBody = JSON.stringify({
+      webhook_request_id: "whatsapp-undated",
+      event_name: ["delivered"],
+      event_message: [
+        {
+          channel: "whatsapp",
+          to: "+919876543210",
+          message_id: "wa-1",
+          ...(dated ? createEventTimeFields(Date.now()) : {}),
+        },
+      ],
     });
-  expect(await receive()).toEqual({ reason: "stale_event" });
-  expect(await receive()).toEqual({ reason: "stale_event" });
-  expect(await t.run((ctx) => ctx.db.query("webhookReceipts").take(3))).toMatchObject([
-    { reason: "stale_event" },
-  ]);
-  expect(await t.run((ctx) => ctx.db.query("events").take(1))).toEqual([]);
-  expect(await t.run((ctx) => ctx.db.get("messages", messageId))).toMatchObject({
-    status: "unknown",
-  });
-});
+    const receive = async () =>
+      t.action(api.webhooks.receive, {
+        rawBody,
+        contentType: "application/json",
+        signature: await signWebhook(rawBody),
+      });
+    expect(await receive()).toEqual({ reason: "stale_event" });
+    expect(await receive()).toEqual({ reason: "stale_event" });
+    expect(await t.run((ctx) => ctx.db.query("webhookReceipts").take(3))).toMatchObject([
+      { reason: "stale_event" },
+    ]);
+    expect(await t.run((ctx) => ctx.db.query("events").take(1))).toEqual([]);
+    expect(await t.run((ctx) => ctx.db.get("messages", messageId))).toMatchObject({
+      status: "unknown",
+    });
+  },
+);
 
 test("a late WhatsApp undelivered event cannot overwrite delivered, and read cannot regress", async () => {
   const t = createComponentTest();

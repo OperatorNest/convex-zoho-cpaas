@@ -424,13 +424,13 @@ test("a message is deleted only after its events fit in the batch budget", async
   const exists = async (id: Id<"messages">) =>
     (await t.run((ctx) => ctx.db.get("messages", id))) !== null;
 
-  expect(await t.mutation(internal.cleanup.run, {})).toEqual({ deleted: 200, hasMore: true });
+  expect(await t.mutation(internal.cleanup.run, {})).toEqual({ deleted: 8, hasMore: true });
   expect(await exists(terminal)).toBe(true);
-  expect(await eventCount()).toBe(300);
+  expect(await eventCount()).toBe(492);
   expect(await t.mutation(internal.cleanup.run, {})).toMatchObject({ hasMore: true });
-  expect(await exists(terminal)).toBe(false);
+  expect(await exists(terminal)).toBe(true);
   expect(await exists(untimed)).toBe(true);
-  for (let i = 0; i < 3 && (await exists(untimed)); i++) await t.mutation(internal.cleanup.run, {});
+  await drain(t);
   expect(await exists(untimed)).toBe(false);
   expect(await eventCount()).toBe(0);
 });
@@ -475,5 +475,41 @@ test.each(["abc", "0", "3651", "2.5", "", " 30 "])(
     );
     await expectZohoCpaasError(t.mutation(internal.cleanup.run, {}), "ZOHO_CPAAS_NOT_CONFIGURED");
     expect(await t.run((ctx) => ctx.db.get("messages", messageId))).not.toBeNull();
+  },
+);
+
+test.each(["expired", "linked", "mixed"] as const)(
+  "cleanup bounds %s event reads to 8 MiB and reschedules until drained",
+  async (kind) => {
+    vi.useFakeTimers();
+    const t = convexTest(schema, modules);
+    const old = Date.now() - 31 * DAY;
+    const messageId = await t.run((ctx) =>
+      ctx.db.insert("messages", {
+        ...baseMessage("large-events", old),
+        status: "accepted",
+        terminalAt: old,
+      }),
+    );
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 20; i++)
+        await ctx.db.insert("events", {
+          testMode: false,
+          channel: "email",
+          type: "open",
+          occurredAt: old,
+          receivedAt: kind === "expired" || (kind === "mixed" && i < 3) ? old : Date.now(),
+          messageId: kind === "expired" ? undefined : messageId,
+          zohoEventId: `large-${i}`,
+          raw: JSON.stringify({ payload: "x".repeat(250 * 1024) }),
+        });
+    });
+    const first = await t.mutation(internal.cleanup.run, {});
+    expect(first).toEqual({ deleted: 8, hasMore: true });
+    expect(await t.run((ctx) => ctx.db.query("events").take(30))).toHaveLength(12);
+    expect(await t.run((ctx) => ctx.db.get("messages", messageId))).not.toBeNull();
+    await drain(t);
+    expect(await t.run((ctx) => ctx.db.query("events").take(1))).toEqual([]);
+    expect(await t.run((ctx) => ctx.db.get("messages", messageId))).toBeNull();
   },
 );

@@ -1,4 +1,4 @@
-import { atOrThrow, drain, required } from "../test-helpers.js";
+import { atOrThrow, drain, required, stubFetch } from "../test-helpers.js";
 
 import { register as registerWorkpool } from "@convex-dev/workpool/test";
 import { convexTest } from "convex-test";
@@ -13,7 +13,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-test("completion callbacks count pre-begin crashes once and cap retries at five", async () => {
+test("completion callbacks finish uncertain crashes without retrying or recounting", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-04T00:00:00Z"));
   const t = convexTest(schema, modules);
@@ -61,16 +61,17 @@ test("completion callbacks count pre-begin crashes once and cap retries at five"
 
   expect(await t.run((ctx) => ctx.db.get("messages", messageId))).toMatchObject({
     status: "unknown",
-    attempts: 5,
+    attempts: 1,
+    error: { code: "ZOHO_CPAAS_NETWORK_ERROR", retryable: false },
   });
   expect(await t.run((ctx) => ctx.db.get("sendJobs", jobId))).toMatchObject({
-    attempts: 5,
+    attempts: 1,
     finishedAt: expect.any(Number),
     payload: "",
   });
 });
 
-test("a crash before begin keeps a canceled retry non-replayable", async () => {
+test("a crash before begin keeps its finished uncertain claim non-replayable", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-04T00:00:00Z"));
   const t = convexTest(schema, modules);
@@ -99,7 +100,7 @@ test("a crash before begin keeps a canceled retry non-replayable", async () => {
     attempts: 1,
     failureDefinitive: false,
   });
-  expect(await t.mutation(api.messages.cancel, { messageId })).toBe(true);
+  expect(await t.mutation(api.messages.cancel, { messageId })).toBe(false);
   expect(await t.mutation(api.email.send, args)).toEqual(ids);
 });
 
@@ -409,3 +410,48 @@ test("a send does not follow a redirect and leaves the message unknown", async (
     error: { code: "ZOHO_CPAAS_INVALID_RESPONSE" },
   });
 });
+
+test.each(["email", "sms", "whatsapp"] as const)(
+  "%s sends retry only transient 429 refusals without provider deduplication",
+  async (channel) => {
+    vi.useFakeTimers();
+    vi.stubEnv("ZOHO_CPAAS_TOKEN", "dummy-token");
+    vi.stubEnv("ZOHO_CPAAS_REGION", "in");
+    const t = createComponentTest();
+    for (const failure of ["network", 400, 403, 408, 429, 500, 503] as const) {
+      const calls = stubFetch(() => {
+        if (failure === "network") throw new Error("connection reset after sending");
+        return new Response(JSON.stringify({ error: { code: "SMI_115" } }), { status: failure });
+      });
+      const idempotencyKey = `${channel}-${failure}`;
+      const ids =
+        channel === "email"
+          ? await t.mutation(api.email.send, { ...emailRequest, testMode: false, idempotencyKey })
+          : [
+              channel === "sms"
+                ? await t.mutation(api.sms.sendTemplate, {
+                    senderKey: "sender",
+                    to: "919876543210",
+                    templateKey: "template",
+                    idempotencyKey,
+                  })
+                : await t.mutation(api.whatsapp.sendTemplate, {
+                    from: "+14155550142",
+                    to: "+919876543210",
+                    templateKey: "template",
+                    idempotencyKey,
+                  }),
+            ];
+      await drain(t);
+      const retryable = failure === 429;
+      const message = await t.query(api.messages.get, { messageId: atOrThrow(ids, 0) });
+      expect(message.error).toMatchObject({
+        code: failure === "network" ? "ZOHO_CPAAS_NETWORK_ERROR" : "ZOHO_CPAAS_PROVIDER_ERROR",
+        retryable,
+      });
+      expect(calls).toHaveLength(retryable ? 5 : 1);
+      expect(message.attempts).toBe(retryable ? 5 : 1);
+      if (failure === "network" || failure === 408) expect(message.status).toBe("unknown");
+    }
+  },
+);

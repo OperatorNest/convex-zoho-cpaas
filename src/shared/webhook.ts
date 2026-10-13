@@ -273,7 +273,7 @@ export function parseWebhookBody(
       ...(zohoRequestId ? { zohoRequestId } : {}),
       ...(zohoMessageId ? { zohoMessageId } : {}),
       ...(clientReference ? { clientReference } : {}),
-      occurredAt: occurredAt(message),
+      occurredAt: channel === "email" ? occurredAt(message) : undefined,
       raw: { event_name: names[index] ?? names[0], event_message: message },
     });
   }

@@ -355,7 +355,7 @@ export async function reconcileRequestEvents(
   const page = await paginator(ctx.db, schema)
     .query("events")
     .withIndex("by_zohoRequestId_and_recipient", (q) => q.eq("zohoRequestId", requestId))
-    .paginate(boundedPage({ cursor, numItems: 100 }));
+    .paginate(boundedPage({ cursor, numItems: 100 }, 4));
   const messages: Doc<"messages">[] = [];
   for (const id of messageIds) {
     const row = await ctx.db.get("messages", id);

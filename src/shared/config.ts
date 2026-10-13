@@ -37,21 +37,22 @@ export function readConfig(env: ComponentEnv) {
     retentionDays > 3650
   )
     throw zohoCpaasError("ZOHO_CPAAS_NOT_CONFIGURED");
-  const tokens = [
-    env.ZOHO_CPAAS_TOKEN,
-    env.ZOHO_CPAAS_EMAIL_TOKEN,
-    env.ZOHO_CPAAS_SMS_TOKEN,
-    env.ZOHO_CPAAS_WHATSAPP_TOKEN,
+  const [token, emailToken, smsToken, whatsappToken] = [
+    readSecret(env.ZOHO_CPAAS_TOKEN),
+    readSecret(env.ZOHO_CPAAS_EMAIL_TOKEN),
+    readSecret(env.ZOHO_CPAAS_SMS_TOKEN),
+    readSecret(env.ZOHO_CPAAS_WHATSAPP_TOKEN),
   ];
-  for (const token of tokens) if (token !== undefined) normalizeToken(token);
+  for (const configuredToken of [token, emailToken, smsToken, whatsappToken])
+    if (configuredToken !== undefined) normalizeToken(configuredToken);
   const baseUrl = regionBaseUrl(env.ZOHO_CPAAS_REGION, env.ZOHO_CPAAS_BASE_URL);
   return {
     region: env.ZOHO_CPAAS_REGION ?? regionFromBaseUrl(baseUrl),
     baseUrl,
-    token: env.ZOHO_CPAAS_TOKEN,
-    emailToken: env.ZOHO_CPAAS_EMAIL_TOKEN,
-    smsToken: env.ZOHO_CPAAS_SMS_TOKEN,
-    whatsappToken: env.ZOHO_CPAAS_WHATSAPP_TOKEN,
+    token,
+    emailToken,
+    smsToken,
+    whatsappToken,
     webhookSecret: readSecret(env.ZOHO_CPAAS_WEBHOOK_SECRET),
     webhookSecretPrevious: readSecret(env.ZOHO_CPAAS_WEBHOOK_SECRET_PREVIOUS),
     retentionDays,

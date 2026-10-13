@@ -127,16 +127,13 @@ export function classifyProviderError(
     channel === "email" &&
     dailyLimit &&
     (primaryCode === undefined || primaryCode === "TM_3601" || primaryCode === "SMI_115");
-  const retryStatus =
-    channel === "email"
-      ? httpStatus === 429 || httpStatus >= 500
-      : httpStatus === 429 || (httpStatus === 503 && explicitZohoCode);
+  const retryStatus = httpStatus === 429;
   const retryable =
     !tooLong &&
     !accountState &&
     !permanentDetail &&
     (!permanentClass || dailyOverride) &&
-    (retryStatus || dailyOverride);
+    retryStatus;
   return {
     ...zohoCpaasError("ZOHO_CPAAS_PROVIDER_ERROR", {
       retryable,
@@ -156,8 +153,8 @@ export function classifyProviderError(
   };
 }
 
-export function classifyNetworkError(channel: Channel): ClassifiedError {
-  const retryable = channel === "email";
+export function classifyNetworkError(): ClassifiedError {
+  const retryable = false;
   return {
     ...zohoCpaasError("ZOHO_CPAAS_NETWORK_ERROR", { retryable }).data,
     code: "ZOHO_CPAAS_NETWORK_ERROR",

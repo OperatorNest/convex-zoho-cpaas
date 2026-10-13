@@ -20,7 +20,7 @@ export const list = query({
       .withIndex("by_testMode_and_channel_and_address", (q) =>
         q.eq("testMode", readTestMode(args.testMode)).eq("channel", args.channel),
       )
-      .paginate(boundedPage(args.paginationOpts)),
+      .paginate(boundedPage(args.paginationOpts, 5)),
 });
 
 export const remove = mutation({

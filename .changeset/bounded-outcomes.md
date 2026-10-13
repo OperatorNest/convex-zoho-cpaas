@@ -9,7 +9,7 @@
 - Breaking: replace validation, configuration, provider rejection and unusable-success codes with `ZOHO_CPAAS_INVALID_ARGUMENT`, `ZOHO_CPAAS_NOT_CONFIGURED`, `ZOHO_CPAAS_PROVIDER_ERROR` and `ZOHO_CPAAS_INVALID_RESPONSE`; uploads distinguish provider, network and response failures.
 - Breaking: reject malformed component env values, including retention days, instead of selecting a default; unset retention remains 30 days.
 - Breaking: store effective `testMode` on all provider-operation rows and rename indexes with the provider identifier fields; regenerate bindings for the new schema.
-- Breaking: preserve `unknown` outcomes until signed webhooks resolve them; SMS and WhatsApp never automatically resend transport uncertainty, and email retries may duplicate provider sends.
+- Breaking: preserve `unknown` outcomes until signed webhooks resolve them; no channel automatically resends transport uncertainty.
 - Breaking: bound pages to 1–100 items and encoded send payloads to 256 KiB, reject malformed cursors and identifiers, and require client or env test-mode opt-in.
 - Breaking: require usable signed-body event timestamps within receipt retention minus one day and five minutes of future skew; deduplicate only committed receipts.
 - Breaking: require Node 24 or newer and keep example functions internal for app authorization.

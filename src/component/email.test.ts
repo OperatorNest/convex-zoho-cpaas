@@ -5,7 +5,7 @@ import { api } from "./_generated/api.js";
 import schema from "./schema.js";
 
 import { send } from "./email.js";
-import { expectZohoCpaasError } from "../test-helpers.js";
+import { atOrThrow, drain, expectZohoCpaasError, stubFetch } from "../test-helpers.js";
 
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
 const emailRequest = {
@@ -76,3 +76,52 @@ test("send rejects oversized identifiers independently of encoded payload size",
   );
   expect(await t.run((ctx) => ctx.db.query("messages").take(1))).toEqual([]);
 });
+
+test.each(["send", "sendTemplate", "sendBatch", "sendTemplateBatch"] as const)(
+  "%s records an uncertain network failure without retrying even with an idempotency key",
+  async (method) => {
+    vi.useFakeTimers();
+    vi.stubEnv("ZOHO_CPAAS_EMAIL_TOKEN", "dummy-token");
+    const t = createComponentTest();
+    const calls = stubFetch(() => {
+      throw new Error("response lost");
+    });
+    const from = emailRequest.from;
+    const idempotencyKey = `uncertain-${method}`;
+    const batchTo = [{ emailAddress: { address: "a@example.test" } }];
+    const args = { from, idempotencyKey, testMode: false };
+    const ids =
+      method === "send"
+        ? await t.mutation(api.email.send, {
+            ...args,
+            to: emailRequest.to,
+            subject: "Subject",
+            textbody: "Body",
+          })
+        : method === "sendTemplate"
+          ? await t.mutation(api.email.sendTemplate, {
+              ...args,
+              to: emailRequest.to,
+              templateKey: "template",
+            })
+          : method === "sendBatch"
+            ? await t.mutation(api.email.sendBatch, {
+                ...args,
+                to: batchTo,
+                subject: "Subject",
+                textbody: "Body",
+              })
+            : await t.mutation(api.email.sendTemplateBatch, {
+                ...args,
+                to: batchTo,
+                templateKey: "template",
+              });
+    await drain(t);
+    expect(calls).toHaveLength(1);
+    expect(await t.query(api.messages.get, { messageId: atOrThrow(ids, 0) })).toMatchObject({
+      status: "unknown",
+      attempts: 1,
+      error: { code: "ZOHO_CPAAS_NETWORK_ERROR", retryable: false },
+    });
+  },
+);

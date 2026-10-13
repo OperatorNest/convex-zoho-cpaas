@@ -97,7 +97,7 @@ test("upload classifies network and malformed successful responses", async () =>
     throw new Error("transport failure");
   });
   await expectZohoCpaasErrorFields(t.action(api.files.upload, file), "ZOHO_CPAAS_NETWORK_ERROR", {
-    retryable: true,
+    retryable: false,
   });
   stubFetch(() => new Response("not-json", { status: 200 }));
   await expectZohoCpaasError(t.action(api.files.upload, file), "ZOHO_CPAAS_INVALID_RESPONSE");
@@ -148,4 +148,55 @@ test("upload does not follow a redirect and reports it as an invalid response", 
   vi.stubGlobal("fetch", fetchMock);
   await expectZohoCpaasError(t.action(api.files.upload, file), "ZOHO_CPAAS_INVALID_RESPONSE");
   expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+});
+
+test.each([
+  [400, false],
+  [403, false],
+  [408, false],
+  [429, true],
+  [500, false],
+  [503, false],
+])(
+  "upload status %s is retryable=%s without a deduplicated provider key",
+  async (status, retryable) => {
+    vi.stubEnv("ZOHO_CPAAS_EMAIL_TOKEN", "dummy-token");
+    const t = convexTest(schema, modules);
+    const calls = stubFetch(
+      () => new Response(JSON.stringify({ error: { code: "SMI_115" } }), { status }),
+    );
+    await expectZohoCpaasErrorFields(
+      t.action(api.files.upload, file),
+      "ZOHO_CPAAS_PROVIDER_ERROR",
+      { retryable, providerStatus: status },
+    );
+    expect(calls).toHaveLength(1);
+  },
+);
+
+test("an upload timeout is not retryable because Zoho may have stored the file", async () => {
+  vi.useFakeTimers();
+  vi.stubEnv("ZOHO_CPAAS_EMAIL_TOKEN", "dummy-token");
+  const t = convexTest(schema, modules);
+  let started: (() => void) | undefined;
+  const requestStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  stubFetch(
+    ({ init }) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        );
+        started?.();
+      }),
+  );
+  const proof = expectZohoCpaasErrorFields(
+    t.action(api.files.upload, file),
+    "ZOHO_CPAAS_NETWORK_ERROR",
+    { retryable: false },
+  );
+  await requestStarted;
+  await vi.advanceTimersByTimeAsync(30_000);
+  await proof;
 });

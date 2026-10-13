@@ -40,7 +40,7 @@ export const upload = action({
         });
       } catch {
         console.warn("ZOHO_CPAAS_NETWORK_ERROR");
-        throw zohoCpaasError("ZOHO_CPAAS_NETWORK_ERROR", { retryable: true });
+        throw zohoCpaasError("ZOHO_CPAAS_NETWORK_ERROR", { retryable: false });
       }
       if (response.status >= 300 && response.status < 400) {
         await response.body?.cancel();

@@ -23,6 +23,6 @@
 - Keep a live message's stored test mode when a reconciled event links to it while env test mode is on.
 - Mark an SMS or WhatsApp message left sending by an interrupted attempt as unknown instead of resending it.
 - Replay an idempotent send before checking provider configuration, so a removed token does not block it.
-- Raise retryable `ZOHO_CPAAS_NETWORK_ERROR` for an upload without a response and `ZOHO_CPAAS_PROVIDER_ERROR` with `providerStatus` for a failed upload with an unreadable body.
+- Raise non-retryable `ZOHO_CPAAS_NETWORK_ERROR` for an upload without a response and `ZOHO_CPAAS_PROVIDER_ERROR` with `providerStatus` for a failed upload with an unreadable body.
 - Derive the reported region from the endpoint host when `ZOHO_CPAAS_REGION` is unset.
 - Record a caught failure before the provider request as `ZOHO_CPAAS_INVALID_ARGUMENT`.

@@ -328,7 +328,7 @@ export class ZohoCpaas {
         if (response.reason === "missing_secret")
           return new Response("Webhook secret is not configured", { status: 500 });
         if (response.reason === "oversized_body")
-          return new Response("Webhook body exceeds limit", { status: 413 });
+          return new Response("Webhook body exceeds limit", { status: 400 });
         if (response.reason === "invalid_signature")
           return Response.json(zohoCpaasError("ZOHO_CPAAS_INVALID_WEBHOOK_SIGNATURE").data, {
             status: 401,

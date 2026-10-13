@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { afterEach, expect, test, vi } from "vitest";
 import { api } from "./_generated/api.js";
 import schema from "./schema.js";
+import { readConfig } from "../shared/config.js";
 import { expectZohoCpaasError } from "../test-helpers.js";
 
 const modules = import.meta.glob(["./**/*.ts", "!./**/*.test.ts"]);
@@ -63,4 +64,32 @@ test("get prefers an explicit region over the base URL host", async () => {
     testMode: false,
     region: "eu",
   });
+});
+
+test.each([
+  "ZOHO_CPAAS_TOKEN",
+  "ZOHO_CPAAS_EMAIL_TOKEN",
+  "ZOHO_CPAAS_SMS_TOKEN",
+  "ZOHO_CPAAS_WHATSAPP_TOKEN",
+])("get rejects padded %s before provider normalization", async (name) => {
+  const t = convexTest(schema, modules);
+  for (const value of [" dummy-token", "dummy-token ", "Zoho-enczapikey dummy-token "]) {
+    vi.stubEnv(name, value);
+    await expectZohoCpaasError(t.query(api.config.get, {}), "ZOHO_CPAAS_NOT_CONFIGURED");
+  }
+  vi.stubEnv(name, "Zoho-enczapikey dummy-token");
+  const config = await t.query(api.config.get, {});
+  expect(config.configured.email || config.configured.sms || config.configured.whatsapp).toBe(true);
+});
+
+test.each([
+  "ZOHO_CPAAS_TOKEN",
+  "ZOHO_CPAAS_EMAIL_TOKEN",
+  "ZOHO_CPAAS_SMS_TOKEN",
+  "ZOHO_CPAAS_WHATSAPP_TOKEN",
+])("the configuration reader rejects malformed Unicode in %s", async (name) => {
+  await expectZohoCpaasError(
+    Promise.resolve().then(() => readConfig({ [name]: "dummy-\ud800" })),
+    "ZOHO_CPAAS_NOT_CONFIGURED",
+  );
 });

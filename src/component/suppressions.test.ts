@@ -83,3 +83,21 @@ test("suppressions are listed and removed per channel with channel-specific norm
       "ZOHO_CPAAS_INVALID_ARGUMENT",
     );
 });
+
+test.each(["cursor", "endCursor"] as const)(
+  "list rejects %s with one value beyond the suppression index key",
+  async (field) => {
+    const t = convexTest(schema, modules);
+    await expectZohoCpaasError(
+      t.query(api.suppressions.list, {
+        channel: "email",
+        paginationOpts: {
+          numItems: 10,
+          cursor: null,
+          [field]: JSON.stringify([null, null, null, null, null, null]),
+        },
+      }),
+      "ZOHO_CPAAS_INVALID_ARGUMENT",
+    );
+  },
+);

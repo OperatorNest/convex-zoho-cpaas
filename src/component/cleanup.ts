@@ -7,6 +7,10 @@ import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 
 const BATCH = 200;
+// Convex caps stored documents at 1 MiB, including event fields and system fields.
+const MAX_STORED_EVENT_BYTES = 1_048_576;
+const EVENT_READ_BUDGET_BYTES = 8 * 1_048_576;
+const EVENT_BATCH_SIZE = Math.floor(EVENT_READ_BUDGET_BYTES / MAX_STORED_EVENT_BYTES);
 const DAY = 86_400_000;
 const STUCK_SENDING_AFTER = DAY;
 
@@ -18,6 +22,7 @@ export const run = internalMutation({
     const now = Date.now();
     const cutoff = now - retentionDays * DAY;
     let remaining = BATCH;
+    let remainingEvents = EVENT_BATCH_SIZE;
     let deleted = 0;
     const jobsToFinalize: Id<"sendJobs">[] = [];
 
@@ -74,31 +79,33 @@ export const run = internalMutation({
       const linked = await ctx.db
         .query("events")
         .withIndex("by_messageId_and_occurredAt", (q) => q.eq("messageId", message._id))
-        .take(remaining);
+        .take(Math.min(remaining, remainingEvents));
       for (const event of linked) {
         await ctx.db.delete("events", event._id);
         remaining--;
+        remainingEvents--;
         deleted++;
       }
-      if (remaining === 0) return false;
+      if (remaining === 0 || remainingEvents === 0) return false;
       await ctx.db.delete("messages", message._id);
       remaining--;
       deleted++;
       return true;
     };
 
-    if (remaining > 0) {
+    if (remaining > 0 && remainingEvents > 0) {
       const events = await ctx.db
         .query("events")
         .withIndex("by_receivedAt", (q) => q.lt("receivedAt", cutoff))
-        .take(remaining);
+        .take(Math.min(remaining, remainingEvents));
       for (const event of events) {
         await ctx.db.delete("events", event._id);
         remaining--;
+        remainingEvents--;
         deleted++;
       }
     }
-    if (remaining > 0) {
+    if (remaining > 0 && remainingEvents > 0) {
       const jobs = await ctx.db
         .query("sendJobs")
         .withIndex("by_finishedAt", (q) => q.gt("finishedAt", 0).lt("finishedAt", cutoff))
@@ -109,7 +116,7 @@ export const run = internalMutation({
         deleted++;
       }
     }
-    if (remaining > 0) {
+    if (remaining > 0 && remainingEvents > 0) {
       const messages = await ctx.db
         .query("messages")
         .withIndex("by_terminalAt", (q) => q.gt("terminalAt", 0).lt("terminalAt", cutoff))
@@ -119,7 +126,7 @@ export const run = internalMutation({
       }
       await finalizeJobs();
     }
-    if (remaining > 0) {
+    if (remaining > 0 && remainingEvents > 0) {
       const fallbackStatuses = [
         "accepted",
         "delivered",
@@ -131,7 +138,7 @@ export const run = internalMutation({
         "canceled",
       ] as const;
       for (const status of fallbackStatuses) {
-        if (remaining === 0) break;
+        if (remaining === 0 || remainingEvents === 0) break;
         const candidates = await ctx.db
           .query("messages")
           .withIndex("by_status_and_terminalAt_and_createdAt", (q) =>
@@ -144,7 +151,7 @@ export const run = internalMutation({
       }
       await finalizeJobs();
     }
-    if (remaining > 0) {
+    if (remaining > 0 && remainingEvents > 0) {
       const receipts = await ctx.db
         .query("webhookReceipts")
         .withIndex("by_createdAt", (q) =>
@@ -158,7 +165,8 @@ export const run = internalMutation({
       }
     }
 
-    if (remaining === 0) await ctx.scheduler.runAfter(0, internal.cleanup.run, {});
-    return { deleted, hasMore: remaining === 0 };
+    const hasMore = remaining === 0 || remainingEvents === 0;
+    if (hasMore) await ctx.scheduler.runAfter(0, internal.cleanup.run, {});
+    return { deleted, hasMore };
   },
 });

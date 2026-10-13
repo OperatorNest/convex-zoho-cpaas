@@ -61,9 +61,7 @@ export const begin = internalMutation({
     for (const id of job.messageIds) {
       const row = await ctx.db.get("messages", id);
       if (!row || row.canceledAt !== undefined) continue;
-      const isResendable =
-        row.status === "queued" ||
-        (job.channel === "email" && (row.status === "sending" || row.status === "unknown"));
+      const isResendable = row.status === "queued";
       if (!isResendable) {
         if (row.status === "sending")
           await ctx.db.patch("messages", id, {
@@ -307,7 +305,7 @@ export const execute = internalAction({
           kind: "accepted",
           warning: "ZOHO_CPAAS_INVALID_RESPONSE" satisfies ZohoCpaasErrorCode,
         };
-      const classified = classifyNetworkError(job.channel);
+      const classified = classifyNetworkError();
       console.warn(classified.code);
       return {
         kind: "failed",
@@ -340,9 +338,9 @@ export const complete = pool.defineOnComplete<
           : {
               kind: "failed",
               error: zohoCpaasError("ZOHO_CPAAS_NETWORK_ERROR", {
-                retryable: job.channel === "email",
+                retryable: false,
               }).data,
-              retryable: job.channel === "email",
+              retryable: false,
               failureDefinitive: false,
             };
 

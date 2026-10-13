@@ -43,7 +43,7 @@ export const list = query({
         .query("messages")
         .withIndex("by_to_and_createdAt", (q) => q.eq("to", recipient))
         .order("desc")
-        .paginate(boundedPage(args.paginationOpts));
+        .paginate(boundedPage(args.paginationOpts, 4));
     }
     if (!args.status) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
     if (args.channel) throw zohoCpaasError("ZOHO_CPAAS_INVALID_ARGUMENT");
@@ -52,7 +52,7 @@ export const list = query({
       .query("messages")
       .withIndex("by_status_and_createdAt", (q) => q.eq("status", status))
       .order("desc")
-      .paginate(boundedPage(args.paginationOpts));
+      .paginate(boundedPage(args.paginationOpts, 4));
   },
 });
 export const listEvents = query({
@@ -65,7 +65,7 @@ export const listEvents = query({
       .query("events")
       .withIndex("by_messageId_and_occurredAt", (q) => q.eq("messageId", messageId))
       .order("desc")
-      .paginate(boundedPage(args.paginationOpts));
+      .paginate(boundedPage(args.paginationOpts, 4));
   },
 });
 export const cancel = mutation({
