@@ -34,15 +34,7 @@ Never edit generated bindings by hand. After schema or function changes run `pnp
 
 ## Toolchain and verification
 
-Use Node 24 and pnpm 12.9.1 from `.mise.toml`; run commands through `mise exec`. TypeScript enables `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride` and `noFallthroughCasesInSwitch`; `exactOptionalPropertyTypes` is off because `convex-helpers` ships incompatible TypeScript source, and must be rechecked on every upgrade. Coverage floors may hold or rise, never fall.
-
-| Change                            | Required checks                                                        |
-| --------------------------------- | ---------------------------------------------------------------------- |
-| Component, schema, shared runtime | `pnpm build:codegen`, `pnpm test`, `pnpm typecheck`, `pnpm smoke`      |
-| Client or exports                 | `pnpm build`, `pnpm typecheck`, affected tests, `pnpm test`            |
-| Tooling or repository rules       | `pnpm check`                                                           |
-| Markdown only                     | `pnpm fmt:check`                                                       |
-| Executable docs                   | Formatting and affected example/client tests; smoke for runtime claims |
+TypeScript enables `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride` and `noFallthroughCasesInSwitch`; `exactOptionalPropertyTypes` is off because `convex-helpers` ships incompatible TypeScript source, and must be rechecked on every upgrade. Coverage floors may hold or rise, never fall.
 
 Tests use dummy env with `vi.stubEnv`, stub `fetch`, and restore env, globals and timers. Report simulator, anonymous local runtime and observed provider results separately. Simulator checks do not prove env bindings or live-account behavior. Smoke uses the shared local-backend lock and no login. `scripts/smoke-harness.mjs` is a shared byte-identical file that builds, copies the package into a temporary workspace and starts the backend; `scripts/smoke.mjs` holds only this component's domain steps.
 
